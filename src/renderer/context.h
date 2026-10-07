@@ -23,10 +23,19 @@ namespace Renderer {
         Frame frames[max_frames_in_flight];
         std::vector<VkSemaphore> renderDone;
         uint32_t currentFrame = 0;
+        std::vector<VkImage> images;
+        std::vector<VkImageView> views;
+        VkQueue graphicsQueue;
+        uint32_t currentImageIndex = 0;
+        uint32_t graphicsQueueFamily = 0;
+    };
+    struct Window {
+        GLFWwindow* window = nullptr;
+        bool shouldClose = false;
     };
     struct Context {
         RenderConfig config;
-        GLFWwindow* window = nullptr;
+        Window window;
         VulkanContext vulkan;
     };
     Context* context();

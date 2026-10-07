@@ -11,7 +11,10 @@ namespace Renderer::ErrorHandeling {
     bool handleError(Error error) {
         std::cerr << "[ErrorHandeling]: " << error << std::endl;
         if (!context()) {
-            std::cerr << "[ErrorHangling]: error in errorhandeling the context is not defined so init wasn't run default config is panic\n";
+            std::cerr << "[ErrorHandeling]: no renderer context (setRenderConfig not called), defaulting to Panic policy\n";
+            panic();
+        }
+        if (context()->config.errorPolicy == RenderErrorPolicy::Panic) {
             panic();
         }
         return context()->config.errorPolicy == RenderErrorPolicy::Return;
