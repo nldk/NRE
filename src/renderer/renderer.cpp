@@ -5,7 +5,7 @@
 #include <memory>
 #include "errorHandeling.h"
 #include "context.h"
-namespace Renderer {
+namespace NRE {
     namespace {std::unique_ptr<Context> globalContext = nullptr;}
     Context* context(){return globalContext.get();}
     Result<void> setRenderConfig(RenderConfig config) {

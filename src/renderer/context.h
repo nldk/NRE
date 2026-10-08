@@ -5,7 +5,7 @@
 #include <vk_mem_alloc.h>
 
 #include "../../include/renderer.h"
-namespace Renderer {
+namespace NRE {
     constexpr int max_frames_in_flight = 2;
     struct Frame {
         VkCommandPool pool;

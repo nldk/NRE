@@ -3,7 +3,7 @@
 
 #include "renderer.h"
 
-namespace Renderer::ErrorHandeling {
+namespace NRE::ErrorHandeling {
     bool handleError(Error error);
     [[noreturn]] inline void panic();
 }

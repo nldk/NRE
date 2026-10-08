@@ -7,7 +7,7 @@
 #include "renderer.h"
 #include "VkBootstrap.h"
 
-namespace Renderer::ErrorHandeling {
+namespace NRE::ErrorHandeling {
     bool handleError(Error error) {
         std::cerr << "[ErrorHandeling]: " << error << std::endl;
         if (!context()) {
