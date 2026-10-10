@@ -5,10 +5,12 @@
 #include "errorHandeling.h"
 #include "renderer.h"
 
-namespace NRE::Shader {
+namespace NRE {
     struct Shader {
-        Shader(std::string path) {
+        ShaderType type;
+        Shader(std::string path, ShaderType type) {
             create(path);
+            this->type = type;
         }
         VkShaderModule shader;
         Result<void> create(std::string path);

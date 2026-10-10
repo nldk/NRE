@@ -6,12 +6,12 @@
 #include "context.h"
 #include "errorHandeling.h"
 
-namespace NRE::Shader {
+namespace NRE {
     Result<void> Shader::create(std::string path) {
         auto c = context();
-        if (c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::AlreadyInitialized,"Renderer already initialized"})) {
-                return std::unexpected(Error{ErrorCode::AlreadyInitialized,"Renderer already initialized"});
+        if (!c) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized"})) {
+                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized"});
             };
         }
         std::ifstream ifs(path,std::ios::binary | std::ios::ate);

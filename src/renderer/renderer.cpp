@@ -309,5 +309,25 @@ namespace NRE {
         glfwPollEvents();
         return {};
     }
+    Result<Handel<Shader>> createShader(std::string shaderPath,ShaderType type) {
+        auto c = context();
+        if (!c) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."})) {
+                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."});
+            };
+        }
+        return c->manager.create(Shader(shaderPath,type));
+    }
+
+    Result<void> destroyShader(Handel<Shader> shader) {
+        auto c = context();
+        if (!c) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."})) {
+                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."});
+            };
+        }
+        c->manager.destroy(shader);
+        return {};
+    }
 }
 

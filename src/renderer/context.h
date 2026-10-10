@@ -4,6 +4,7 @@
 #include "VkBootstrap.h"
 #include <vk_mem_alloc.h>
 
+#include "resourceManagement.h"
 #include "../../include/renderer.h"
 namespace NRE {
     constexpr int max_frames_in_flight = 2;
@@ -37,6 +38,7 @@ namespace NRE {
         RenderConfig config;
         Window window;
         VulkanContext vulkan;
+        ResourceManager manager;
     };
     Context* context();
 }
