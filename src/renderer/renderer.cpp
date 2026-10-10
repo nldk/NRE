@@ -5,6 +5,8 @@
 #include <memory>
 #include "errorHandeling.h"
 #include "context.h"
+#define VMA_IMPLEMENTATION
+#include <vk_mem_alloc.h>
 namespace NRE {
     namespace {std::unique_ptr<Context> globalContext = nullptr;}
     Context* context(){return globalContext.get();}
@@ -176,7 +178,17 @@ namespace NRE {
         for (VkSemaphore& s : c->vulkan.renderDone)
             vkCreateSemaphore(c->vulkan.device, &sci, nullptr, &s);
 
+        VmaAllocatorCreateInfo aci{};
+        aci.instance         = c->vulkan.instance.instance;
+        aci.physicalDevice   = c->vulkan.physicalDevice.physical_device;
+        aci.device           = c->vulkan.device.device;
+        aci.vulkanApiVersion = VK_API_VERSION_1_3;
 
+        if (vmaCreateAllocator(&aci, &c->vulkan.allocator) != VK_SUCCESS) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::FailedToCreateAllocator,"Failed to create vma allocator."})) {
+                return std::unexpected(Error{ErrorCode::FailedToCreateAllocator,"Failed to create vma allocator."});
+            };
+        }
 
         return {};
     }
@@ -189,6 +201,8 @@ namespace NRE {
             };
         }
         vkDeviceWaitIdle(c->vulkan.device);
+        c->manager.destroyAll();
+        vmaDestroyAllocator(c->vulkan.allocator);
         for (Frame& f : c->vulkan.frames) {
             vkDestroyCommandPool(c->vulkan.device, f.pool, nullptr);  // frees f.cmd along with it
             vkDestroyFence(c->vulkan.device, f.in_flight, nullptr);
@@ -212,6 +226,12 @@ namespace NRE {
         if (!c) {
             if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."})) {
                 return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."});
+            };
+        }
+        Pipeline* pipeline = c->manager.get(c->vulkan.pipelineBound);
+        if (!pipeline) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"})) {
+                return std::unexpected(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"});
             };
         }
         Frame& f = c->vulkan.frames[c->vulkan.currentFrame % max_frames_in_flight];
@@ -239,6 +259,15 @@ namespace NRE {
         ri.pColorAttachments = &color;
         vkCmdBeginRendering(f.cmd,&ri);
 
+        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline->pipeline);
+
+        VkExtent2D e = c->vulkan.swapchain.extent;
+        VkViewport viewport{0.0f, 0.0f, (float)e.width, (float)e.height, 0.0f, 1.0f};
+        VkRect2D scissor{{0, 0}, e};
+        vkCmdSetViewport(f.cmd, 0, 1, &viewport);
+        vkCmdSetScissor(f.cmd, 0, 1, &scissor);
+
+        vkCmdDraw(f.cmd, 3, 1, 0, 0);   // 3 vertices, 1 instance
 
 
         vkCmdEndRendering(f.cmd);
@@ -329,5 +358,69 @@ namespace NRE {
         c->manager.destroy(shader);
         return {};
     }
+
+    Result<Handel<Pipeline> > createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader) {
+        auto c = context();
+        if (!c) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."})) {
+                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."});
+            };
+        }
+        return c->manager.create(Pipeline(vertexShader,fragmentShader));
+    }
+    Result<void> destroyPipeline(Handel<Pipeline> pipeline) {
+        auto c = context();
+        if (!c) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."})) {
+                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."});
+            };
+        }
+        c->manager.destroy(pipeline);
+        return {};
+    }
+
+    Result<void> bindPipeline(Handel<Pipeline> pipeline) {
+        auto c = context();
+        if (!c) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."})) {
+                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."});
+            };
+        }
+        auto pipeLine = c->manager.get(pipeline);
+        if (!pipeLine) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"})) {
+                return std::unexpected(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"});
+            };
+        }
+        c->vulkan.pipelineBound = pipeline;
+        return {};
+    }
+
+    Result<Handel<Model>> createModel(std::string modelPath) {
+        auto c = context();
+        if (!c) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."})) {
+                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."});
+            };
+        }
+        auto model = loadModel(modelPath);
+        if (!model) {
+            ErrorHandeling::handleError(model.error());
+            return std::unexpected(model.error());
+        }
+        return c->manager.create(std::move(*model));
+    }
+
+    Result<void> destroyModel(Handel<Model> model) {
+        auto c = context();
+        if (!c) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."})) {
+                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."});
+            };
+        }
+        c->manager.destroy(model);
+        return {};
+    }
+
 }
 

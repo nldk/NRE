@@ -5,6 +5,7 @@
 
 #include "pipeline.h"
 #include "shader.h"
+#include "model.h"
 
 namespace NRE {
     template<class T>
@@ -28,10 +29,15 @@ namespace NRE {
             ++generations[h.index];
             freeList.push_back(h.index);
         }
+        void clear() {
+            items.clear();
+            generations.clear();
+            freeList.clear();
+        }
     };
     class ResourceManager {
         static uint64_t nextid;
-        std::tuple<Pool<Shader>, Pool<Pipeline>> pools;
+        std::tuple<Pool<Shader>, Pool<Pipeline>, Pool<Model>> pools;
     public:
         template<class T>
         Handel<T> create(T obj) { return std::get<Pool<T>>(pools).create(std::move(obj)); }
@@ -41,5 +47,8 @@ namespace NRE {
 
         template<class T>
         void destroy(Handel<T> h) { std::get<Pool<T>>(pools).destroy(h); }
+
+        void destroyAll();
+        ~ResourceManager() {destroyAll();}
     };
 }

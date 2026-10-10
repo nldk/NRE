@@ -30,4 +30,17 @@ namespace NRE {
         vkCreateShaderModule(c->vulkan.device, &info, nullptr, &shader);
         return {};
     }
+    Result<void> Shader::destroy() {
+        auto c = context();
+        if (!c) {
+            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized"})) {
+                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized"});
+            };
+        }
+        if (shader) {
+            vkDestroyShaderModule(c->vulkan.device, shader, nullptr);
+        }
+        shader = VK_NULL_HANDLE;
+        return {};
+    }
 }

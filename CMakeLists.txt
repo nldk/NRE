@@ -10,7 +10,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ---------------------------------------------------------------------------
 find_package(Vulkan 1.3 REQUIRED COMPONENTS glslc)
 find_package(glfw3 3.4 REQUIRED)
-find_package(glm REQUIRED)
 
 # ---------------------------------------------------------------------------
 # Fetched dependencies
@@ -28,17 +27,49 @@ FetchContent_Declare(
 FetchContent_Declare(
     VulkanMemoryAllocator
     GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
-    GIT_TAG        master
+    GIT_TAG        v3.3.0
+    GIT_SHALLOW    TRUE
+    SYSTEM
+)
+
+FetchContent_Declare(
+    glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG        1.0.1
+    GIT_SHALLOW    TRUE
+    SYSTEM
+)
+
+FetchContent_Declare(
+    fastgltf
+    GIT_REPOSITORY https://github.com/spnda/fastgltf.git
+    GIT_TAG        v0.9.1
+    GIT_SHALLOW    TRUE
+    SYSTEM
+)
+
+FetchContent_Declare(
+    tinyobjloader
+    GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
+    GIT_TAG        v2.0.0rc13
     GIT_SHALLOW    TRUE
     SYSTEM
 )
 
 set(VK_BOOTSTRAP_TEST OFF CACHE BOOL "" FORCE)
 
+# GLM is header-only; skip its optional static library and tests.
+set(GLM_BUILD_LIBRARY OFF CACHE BOOL "" FORCE)
+set(GLM_BUILD_TESTS   OFF CACHE BOOL "" FORCE)
+
+# fastgltf (and the simdjson it downloads) are static libs that end up inside
+# librenderer.so, so they must be position-independent too.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # vk-bootstrap is a static lib that ends up inside librenderer.so, so it
 # must be compiled as position-independent code.
 set(VK_BOOTSTRAP_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(vk_bootstrap VulkanMemoryAllocator)
+FetchContent_MakeAvailable(vk_bootstrap VulkanMemoryAllocator glm fastgltf tinyobjloader)
 
 # ---------------------------------------------------------------------------
 # Shaders: every .vert/.frag/.comp in shaders/ is compiled to build/shaders/*.spv
@@ -85,7 +116,17 @@ add_library(renderer SHARED ${RENDERER_SOURCES}
         src/renderer/renderer.cpp
         src/renderer/context.h
         src/renderer/errorHandeling.cpp
-        src/renderer/errorHandeling.h)
+        src/renderer/errorHandeling.h
+        src/renderer/shader.cpp
+        src/renderer/shader.h
+        src/renderer/resourceManagement.cpp
+        src/renderer/resourceManagement.h
+        src/renderer/pipeline.cpp
+        src/renderer/pipeline.h
+        src/renderer/model.cpp
+        src/renderer/model.h
+        src/renderer/buffer.cpp
+        src/renderer/buffer.h)
 add_dependencies(renderer shaders)
 
 # Only symbols marked RENDERER_API are exported; vk-bootstrap, VMA and the
@@ -123,6 +164,8 @@ target_link_libraries(renderer
         Vulkan::Vulkan
         vk-bootstrap::vk-bootstrap
         GPUOpen::VulkanMemoryAllocator
+        fastgltf::fastgltf
+        tinyobjloader
         glfw
 )
 
@@ -131,9 +174,9 @@ target_compile_definitions(renderer
     PUBLIC
         GLM_FORCE_DEPTH_ZERO_TO_ONE
         GLM_FORCE_RADIANS
+        SHADER_DIR="${SHADER_OUT_DIR}"
     PRIVATE
         GLFW_INCLUDE_VULKAN
-        SHADER_DIR="${SHADER_OUT_DIR}"
         $<$<CONFIG:Debug>:RENDERER_ENABLE_VALIDATION>
 )
 
@@ -158,6 +201,6 @@ foreach(TARGET renderer VulkanRenderer)
         LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin
     )
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
     endif()
 endforeach()

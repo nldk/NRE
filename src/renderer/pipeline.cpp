@@ -83,4 +83,13 @@ namespace NRE {
         VkResult r = vkCreateGraphicsPipelines(c->vulkan.device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipeline);
         return {};
     }
+    Pipeline::~Pipeline() {
+        auto c = context();
+        if (!c) {
+            ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized"});
+            std::abort();
+        }
+        if (pipeline) vkDestroyPipeline(c->vulkan.device, pipeline, nullptr);
+        if (pipelineLayout) vkDestroyPipelineLayout(c->vulkan.device, pipelineLayout, nullptr);
+    }
 }

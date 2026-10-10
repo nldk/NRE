@@ -29,6 +29,7 @@ namespace NRE {
         VkQueue graphicsQueue;
         uint32_t currentImageIndex = 0;
         uint32_t graphicsQueueFamily = 0;
+        Handel<Pipeline> pipelineBound;
     };
     struct Window {
         GLFWwindow* window = nullptr;
