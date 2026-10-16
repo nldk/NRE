@@ -5,5 +5,5 @@
 
 namespace NRE::ErrorHandeling {
     bool handleError(Error error);
-    [[noreturn]] inline void panic();
+    [[noreturn]] void panic();
 }

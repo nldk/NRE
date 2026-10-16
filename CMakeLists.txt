@@ -126,7 +126,11 @@ add_library(renderer SHARED ${RENDERER_SOURCES}
         src/renderer/model.cpp
         src/renderer/model.h
         src/renderer/buffer.cpp
-        src/renderer/buffer.h)
+        src/renderer/buffer.h
+        src/renderer/upload.cpp
+        src/renderer/upload.h
+        src/renderer/scene.cpp
+        src/renderer/scene.h)
 add_dependencies(renderer shaders)
 
 # Only symbols marked RENDERER_API are exported; vk-bootstrap, VMA and the
@@ -175,6 +179,7 @@ target_compile_definitions(renderer
         GLM_FORCE_DEPTH_ZERO_TO_ONE
         GLM_FORCE_RADIANS
         SHADER_DIR="${SHADER_OUT_DIR}"
+        ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
     PRIVATE
         GLFW_INCLUDE_VULKAN
         $<$<CONFIG:Debug>:RENDERER_ENABLE_VALIDATION>

@@ -7,6 +7,9 @@
 #include <string_view>
 
 #include <cstdint>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace NRE {
     enum class ShaderType {
@@ -39,12 +42,18 @@ namespace NRE {
         UnsupportedFormat,
         ModelLoadFailed,
         FailedToCreateAllocator,
+        BufferCreationFailed,
+        UploadFailed,
+        NoPipelineBound,
+        NoSceneBound,
         UnknownError,
     };
     struct WindowConfig {
         int width,height;
         std::string title;
         bool resizable;
+        // Appends "- 144 FPS (6.94 ms)" to the title, updated twice a second.
+        bool showFpsInTitle = true;
     };
     struct RenderConfig {
         RenderMode mode;
@@ -75,6 +84,11 @@ namespace NRE {
             case ErrorCode::ErrorCreatingPipeline: return "ErrorCreatingPipeline";
             case ErrorCode::UnsupportedFormat: return "UnsupportedFormat";
             case ErrorCode::ModelLoadFailed: return "ModelLoadFailed";
+            case ErrorCode::FailedToCreateAllocator: return "FailedToCreateAllocator";
+            case ErrorCode::BufferCreationFailed: return "BufferCreationFailed";
+            case ErrorCode::UploadFailed: return "UploadFailed";
+            case ErrorCode::NoPipelineBound: return "NoPipelineBound";
+            case ErrorCode::NoSceneBound: return "NoSceneBound";
         }
         return "UnknownError. Not in enum.";
     }
@@ -92,13 +106,26 @@ namespace NRE {
     template <class T>
     class Handel {
         public:
-        uint32_t index;
-        uint32_t generation;
+        // A default-constructed handle refers to nothing, so lookups with it fail.
+        uint32_t index = UINT32_MAX;
+        uint32_t generation = 0;
+        bool operator==(const Handel&) const = default;
+    };
+
+    // Position/rotation/scale of an object in world space. Applied as scale, then rotation, then translation.
+    struct Transform {
+        glm::vec3 position{0.0f};
+        glm::quat rotation = glm::identity<glm::quat>();
+        glm::vec3 scale{1.0f};
+        glm::mat4 matrix() const {
+            return glm::translate(glm::mat4(1.0f), position) * glm::mat4_cast(rotation) * glm::scale(glm::mat4(1.0f), scale);
+        }
     };
 
     struct Shader;
     class Pipeline;
     struct Model;
+    class Scene;
 
     RENDERER_API Result<void> setRenderConfig(RenderConfig config);
     RENDERER_API Result<void> init();
@@ -115,6 +142,39 @@ namespace NRE {
     RENDERER_API Result<void> bindPipeline(Handel<Pipeline> pipeline);
     RENDERER_API Result<Handel<Model>> createModel(std::string modelPath);
     RENDERER_API Result<void> destroyModel(Handel<Model> model);
+    RENDERER_API Result<void> setModelTransform(Handel<Model> model, const Transform& transform);
+    RENDERER_API Result<Transform> getModelTransform(Handel<Model> model);
+    RENDERER_API Result<glm::mat4> getModelMatrix(Handel<Model> model);
+    RENDERER_API Result<void> translateModel(Handel<Model> model, glm::vec3 offset);
+    RENDERER_API Result<void> setVisibility(Handel<Model> model, bool visible);
+    RENDERER_API Result<Handel<Scene>> createScene();
+    RENDERER_API Result<void> destroyScene(Handel<Scene> scene);
+    RENDERER_API Result<void> bindScene(Handel<Scene> scene);
+    RENDERER_API Result<Handel<Scene>> getBoundScene();
+    // Add to / remove from the bound scene. Adding a model that's already in it does nothing.
+    RENDERER_API Result<void> addModelToScene(Handel<Model> model);
+    RENDERER_API Result<void> removeModelFromScene(Handel<Model> model);
+    //Angle is in radians.
+    RENDERER_API Result<void> rotateModel(Handel<Model> model, float angle, glm::vec3 axis);
+    RENDERER_API Result<void> scaleModel(Handel<Model> model, glm::vec3 factor);
+
+    // Angles are in radians.
+    RENDERER_API Result<void> setCameraPosition(glm::vec3 position);
+    RENDERER_API Result<glm::vec3> getCameraPosition();
+
+    RENDERER_API Result<void> moveCamera(glm::vec3 offset);
+    RENDERER_API Result<void> moveCameraRelative(glm::vec3 offset);
+    RENDERER_API Result<void> setCameraRotation(float yaw, float pitch);
+    RENDERER_API Result<void> rotateCamera(float yawDelta, float pitchDelta);
+    RENDERER_API Result<void> cameraLookAt(glm::vec3 target);
+    RENDERER_API Result<glm::vec3> getCameraForward();
+    RENDERER_API Result<glm::mat4> getViewMatrix();
+
+    // Frames per second, averaged over the last half second.
+    RENDERER_API Result<float> getFPS();
+    // Seconds between the last two presented frames. Multiply movement by this to make it frame-rate independent.
+    RENDERER_API Result<float> getDeltaTime();
+
 };
 
 #endif //VULKANRENDERER_RENDERER_H

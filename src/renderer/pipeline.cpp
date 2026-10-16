@@ -3,7 +3,7 @@
 #include "context.h"
 
 namespace NRE {
-    Result<void> Pipeline::createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader) {
+    Result<void> Pipeline::createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader,const VertexLayout& layout = {}) {
         auto c = context();
         if (!c) {
             if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized"})) {
@@ -25,8 +25,12 @@ namespace NRE {
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr,0, VK_SHADER_STAGE_VERTEX_BIT, vertex->shader, "main"};
         stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr,0, VK_SHADER_STAGE_FRAGMENT_BIT, fragment->shader, "main"};
-        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
 
+        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+        vi.vertexBindingDescriptionCount = static_cast<uint32_t>(layout.bindings.size());
+        vi.pVertexBindingDescriptions = layout.bindings.data();
+        vi.vertexAttributeDescriptionCount = static_cast<uint32_t>(layout.attributes.size());
+        vi.pVertexAttributeDescriptions = layout.attributes.data();
 
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
         ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -37,8 +41,9 @@ namespace NRE {
 
         VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
         rs.polygonMode = VK_POLYGON_MODE_FILL;
-        rs.cullMode = VK_CULL_MODE_NONE;
-        rs.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+        rs.cullMode = VK_CULL_MODE_BACK_BIT;
+        rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rs.lineWidth = 1.0f;
 
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
@@ -57,13 +62,28 @@ namespace NRE {
         dyn.dynamicStateCount = 2;
         dyn.pDynamicStates = dynStates;
 
-        // Empty layout: no descriptors or push constants yet
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(PushConstants);
+
         VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        plci.pPushConstantRanges = &pcr;
+        plci.pushConstantRangeCount = 1;
+
         vkCreatePipelineLayout(c->vulkan.device, &plci, nullptr, &pipelineLayout);
+
         VkFormat colorFormat = c->vulkan.swapchain.image_format;
         VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
         rci.colorAttachmentCount = 1;
         rci.pColorAttachmentFormats = &colorFormat;
+        rci.depthAttachmentFormat = depthFormat;
+
+
+        VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+        ds.depthTestEnable = VK_TRUE;
+        ds.depthWriteEnable = VK_TRUE;
+        ds.depthCompareOp = VK_COMPARE_OP_LESS;
 
         VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
         gp.pNext = &rci;
@@ -74,7 +94,7 @@ namespace NRE {
         gp.pViewportState = &vp;
         gp.pRasterizationState = &rs;
         gp.pMultisampleState = &ms;
-        gp.pDepthStencilState = nullptr;   // OK: no depth attachment
+        gp.pDepthStencilState = &ds;
         gp.pColorBlendState = &cb;
         gp.pDynamicState = &dyn;
         gp.layout = pipelineLayout;
