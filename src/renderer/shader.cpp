@@ -9,11 +9,7 @@
 namespace NRE {
     Result<void> Shader::create(std::string path) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized"})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized"});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized");
         std::ifstream ifs(path,std::ios::binary | std::ios::ate);
         if (!ifs.is_open()) {
             if (ErrorHandeling::handleError(Error{ErrorCode::FileNotFound,"File " + path + " not found"})) {
@@ -32,11 +28,7 @@ namespace NRE {
     }
     Result<void> Shader::destroy() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized"})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized"});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized");
         if (shader) {
             vkDestroyShaderModule(c->vulkan.device, shader, nullptr);
         }

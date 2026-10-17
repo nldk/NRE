@@ -132,11 +132,7 @@ namespace NRE {
     }
     Result<void> recreateSwapchain() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Cannot recreate swapchain: renderer not initialized."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Cannot recreate swapchain: renderer not initialized."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Cannot recreate swapchain: renderer not initialized.");
         // A minimized window has no size and a 0x0 swapchain isn't allowed. Keep the old one; the resize flag
         // stays set, so this is tried again after the next present.
         VkExtent2D extent = framebufferExtent(c);
@@ -172,11 +168,7 @@ namespace NRE {
     }
     Result<void> init() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer config not created. create with setRenderConfig."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer config not created. create with setRenderConfig.");
         // Validation checks every Vulkan call, which costs ~60% of the frame rate, so only Debug builds turn it on.
 #ifdef RENDERER_ENABLE_VALIDATION
         constexpr bool enableValidation = true;
@@ -323,11 +315,7 @@ namespace NRE {
 
     Result<void> shutdown() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         vkDeviceWaitIdle(c->vulkan.device);
         c->manager.destroyAll();
         destroyDepthImage(c);
@@ -354,11 +342,7 @@ namespace NRE {
 
     Result<void> renderFrame() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         Pipeline* pipeline = c->manager.get(c->vulkan.pipelineBound);
         if (!pipeline) {
             if (ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"})) {
@@ -432,11 +416,7 @@ namespace NRE {
 
     Result<void> submitFrame() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         Frame& f = c->vulkan.frames[c->vulkan.currentFrame % max_frames_in_flight];
         VkCommandBufferSubmitInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, nullptr, f.cmd};
         VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.image_acquired, 0,
@@ -453,11 +433,7 @@ namespace NRE {
 
     Result<void> presentFrame() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &c->vulkan.renderDone[c->vulkan.currentImageIndex];
         pi.swapchainCount = 1; pi.pSwapchains = &c->vulkan.swapchain.swapchain; pi.pImageIndices = &c->vulkan.currentImageIndex;
@@ -470,72 +446,44 @@ namespace NRE {
 
     Result<bool> windowShouldClose() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         return {c->window.shouldClose};
     }
 
     Result<void> pollEvents() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         glfwPollEvents();
         return {};
     }
     Result<Handel<Shader>> createShader(std::string shaderPath,ShaderType type) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         return c->manager.create(Shader(shaderPath,type));
     }
 
     Result<void> destroyShader(Handel<Shader> shader) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         c->manager.destroy(shader);
         return {};
     }
 
     Result<Handel<Pipeline> > createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         return c->manager.create(Pipeline(vertexShader,fragmentShader,Vertex::layout()));
     }
     Result<void> destroyPipeline(Handel<Pipeline> pipeline) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         c->manager.destroy(pipeline);
         return {};
     }
 
     Result<void> bindPipeline(Handel<Pipeline> pipeline) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         auto pipeLine = c->manager.get(pipeline);
         if (!pipeLine) {
             if (ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"})) {
@@ -548,11 +496,7 @@ namespace NRE {
 
     Result<Handel<Model>> createModel(std::string modelPath) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         auto model = loadModel(modelPath);
         if (!model) {
             ErrorHandeling::handleError(model.error());
@@ -564,11 +508,7 @@ namespace NRE {
 
     Result<void> destroyModel(Handel<Model> model) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         if (Model* m = c->manager.get(model)) {
             m->releaseGpuMeshes();
             for (Handel<Scene> scene : m->scenes) {
@@ -583,10 +523,7 @@ namespace NRE {
     namespace {
         Result<Model*> getModel(Handel<Model> handle) {
             auto c = context();
-            if (!c) {
-                ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            }
+            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
             Model* model = c->manager.get(handle);
             if (!model) {
                 ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to model out of date or non-existing"});
@@ -625,10 +562,7 @@ namespace NRE {
     namespace {
         Result<Scene*> getScene(Handel<Scene> handle) {
             auto c = context();
-            if (!c) {
-                ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            }
+            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
             Scene* scene = c->manager.get(handle);
             if (!scene) {
                 ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to scene out of date or non-existing"});
@@ -639,10 +573,7 @@ namespace NRE {
 
         Result<Scene*> getBoundScenePtr() {
             auto c = context();
-            if (!c) {
-                ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            }
+            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
             Scene* scene = c->manager.get(c->currentScene);
             if (!scene) {
                 ErrorHandeling::handleError(Error{ErrorCode::NoSceneBound,"No scene was bound. Create one with createScene or bind one with bindScene."});
@@ -658,11 +589,7 @@ namespace NRE {
 
     Result<Handel<Scene>> createScene() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         Handel<Scene> scene = c->manager.create(Scene{});
         if (!c->manager.get(c->currentScene)) c->currentScene = scene;
         return scene;
@@ -752,19 +679,13 @@ namespace NRE {
 
     Result<float> getFPS() {
         auto c = context();
-        if (!c) {
-            ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         return static_cast<float>(c->timer.fps);
     }
 
     Result<float> getDeltaTime() {
         auto c = context();
-        if (!c) {
-            ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         return static_cast<float>(c->timer.deltaTime);
     }
 

@@ -5,11 +5,7 @@
 namespace NRE {
     Result<void> Pipeline::createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader,const VertexLayout& layout = {}) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized"})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized"});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized");
         auto vertex = c->manager.get(vertexShader);
         if (!vertex) {
             if (ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"})) {
@@ -68,6 +64,17 @@ namespace NRE {
         pcr.size       = sizeof(PushConstants);
 
         VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+
+        std::vector<VkDescriptorSetLayout> descriptorLayouts;
+        descriptorLayouts.reserve(descriptorSetLayouts.size());
+
+        for (auto& l : descriptorSetLayouts) {
+            descriptorLayouts.push_back(l.getDescriptorSetLayout());
+        }
+
+        plci.setLayoutCount = descriptorLayouts.size();
+        plci.pSetLayouts    = descriptorLayouts.data();
+
         plci.pPushConstantRanges = &pcr;
         plci.pushConstantRangeCount = 1;
 

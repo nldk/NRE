@@ -14,11 +14,7 @@ namespace NRE {
     }
     Result<void> Scene::draw(VkCommandBuffer commandBuffer) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized. Initialize with init."});
-            };
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         auto pipeline = c->manager.get(c->vulkan.pipelineBound);
         if (!pipeline) {
             if (ErrorHandeling::handleError(Error{ErrorCode::NoPipelineBound,"No pipeline was bound. Bind one with bindpipeline."})) {

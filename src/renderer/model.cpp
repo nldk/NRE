@@ -122,12 +122,7 @@ namespace NRE {
 
     Result<void> Model::uploadMeshes() {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized"})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized"});
-            };
-            return {};
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized");
 
         // Where each mesh's vertices and indices sit inside the shared staging buffer,
         // plus the new GPU buffers. These only move into the mesh once the copy succeeded.

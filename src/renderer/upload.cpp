@@ -6,12 +6,7 @@
 namespace NRE {
     Result<void> immediateSubmit(const std::function<void(VkCommandBuffer)>& record) {
         auto c = context();
-        if (!c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized"})) {
-                return std::unexpected(Error{ErrorCode::NotInitialized,"Renderer not initialized"});
-            };
-            return {};
-        }
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized");
         UploadContext& u = c->vulkan.upload;
         vkResetCommandBuffer(u.cmd, 0);
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};

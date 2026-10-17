@@ -19,6 +19,11 @@ namespace NRE::ErrorHandeling {
         }
         return context()->config.errorPolicy == RenderErrorPolicy::Return;
     };
+    std::unexpected<Error> notInitialized(std::string_view message) {
+        Error error{ErrorCode::NotInitialized, std::string(message)};
+        handleError(error);
+        return std::unexpected(std::move(error));
+    }
     void panic() {
         std::abort();
     }
