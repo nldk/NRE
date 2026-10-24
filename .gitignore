@@ -1,0 +1,42 @@
+# Build directories (CLion: cmake-build-*, plain CMake: build*)
+cmake-build-*/
+build*/
+out/
+
+# CMake artifacts from in-source configures
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+compile_commands.json
+_deps/
+
+# Compiled shaders
+*.spv
+*.spv.d
+
+# Compiled binaries
+*.o
+*.obj
+*.so
+*.so.*
+*.a
+*.dll
+*.exe
+
+# clangd
+.cache/
+
+# JetBrains (CLion)
+.idea/
+
+# VS Code
+.vscode/
+
+# Editor / OS junk
+*.swp
+*~
+.DS_Store
+
+# RenderDoc captures
+*.rdc

@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# OFF: NRE::Unsafe (renderer_unsafe.h) isn't compiled, so librenderer.so doesn't contain or export it.
+# The *-unsafe presets in CMakePresets.json turn it on.
+option(NRE_UNSAFE_API "Build and export NRE::Unsafe: raw Vulkan/GLFW handles from inside the renderer" OFF)
+
 # ---------------------------------------------------------------------------
 # System dependencies
 # ---------------------------------------------------------------------------
@@ -19,8 +23,8 @@ include(FetchContent)
 FetchContent_Declare(
     vk_bootstrap
     GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap.git
-    GIT_TAG        main
-    GIT_SHALLOW    TRUE
+    # Pinned so a configure never pulls in new upstream changes. A commit hash can't be fetched shallow.
+    GIT_TAG        558b0024c4af3abffbf581fc06b9051bd9b64b93   # main, 2026-10-07
     SYSTEM
 )
 
@@ -126,6 +130,9 @@ file(GLOB_RECURSE RENDERER_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/*.h
 )
+if(NOT NRE_UNSAFE_API)
+    list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/src/renderer/unsafe/")
+endif()
 
 add_library(renderer SHARED ${RENDERER_SOURCES}
         src/renderer/gpu/image.cpp
@@ -186,6 +193,13 @@ target_compile_definitions(renderer
         GLFW_INCLUDE_VULKAN
         $<$<CONFIG:Debug>:RENDERER_ENABLE_VALIDATION>
 )
+
+if(NRE_UNSAFE_API)
+    # PUBLIC so the app sees it too: renderer_unsafe.h refuses to compile without it.
+    target_compile_definitions(renderer PUBLIC NRE_UNSAFE_API)
+    # renderer_unsafe.h uses Vulkan types, so the app needs the Vulkan headers (not the loader library).
+    target_link_libraries(renderer PUBLIC Vulkan::Headers)
+endif()
 
 # ---------------------------------------------------------------------------
 # App

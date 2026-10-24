@@ -1,0 +1,29 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "unsafe-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-${presetName}",
+      "cacheVariables": { "NRE_UNSAFE_API": "ON" }
+    },
+    {
+      "name": "debug-unsafe",
+      "displayName": "Debug (unsafe API)",
+      "inherits": "unsafe-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "release-unsafe",
+      "displayName": "Release (unsafe API)",
+      "inherits": "unsafe-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug-unsafe", "configurePreset": "debug-unsafe" },
+    { "name": "release-unsafe", "configurePreset": "release-unsafe" }
+  ]
+}
