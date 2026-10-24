@@ -5,6 +5,7 @@
 #include <renderer_export.h>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <cstdint>
 #include <glm/glm.hpp>
@@ -21,6 +22,11 @@ namespace NRE {
     enum class RenderMode {
         Render_3D,
         Render_2D,
+    };
+    enum class MouseButton {
+        Left,
+        Right,
+        Middle,
     };
     enum class RenderErrorPolicy {
         Ignore,
@@ -46,13 +52,16 @@ namespace NRE {
         UploadFailed,
         NoPipelineBound,
         NoSceneBound,
+        ErrorCreatingTexture,
+        ImageCreationFailed,
+        ImageViewCreationFailed,
+        IndexOutOfRange,
         UnknownError,
     };
     struct WindowConfig {
         int width,height;
         std::string title;
         bool resizable;
-        // Appends "- 144 FPS (6.94 ms)" to the title, updated twice a second.
         bool showFpsInTitle = true;
     };
     struct RenderConfig {
@@ -76,6 +85,7 @@ namespace NRE {
             case ErrorCode::WrongMode:            return "WrongMode";
             case ErrorCode::NotInitialized:       return "NotInitialized";
             case ErrorCode::AlreadyInitialized:   return "AlreadyInitialized";
+            case ErrorCode::IndexOutOfRange:      return "IndexOutOfRange";
             case ErrorCode::UnknownError:         return "UnknownError";
             case ErrorCode::ErrorCreatingVulkanInstance: return "ErrorCreatingVulkanInstance";
             case ErrorCode::ErrorCreatingSwapchain: return "ErrorCreatingSwapchain";
@@ -89,6 +99,9 @@ namespace NRE {
             case ErrorCode::UploadFailed: return "UploadFailed";
             case ErrorCode::NoPipelineBound: return "NoPipelineBound";
             case ErrorCode::NoSceneBound: return "NoSceneBound";
+            case ErrorCode::ErrorCreatingTexture:return "ErrorCreatingTexture";
+            case ErrorCode::ImageCreationFailed: return "ImageCreationFailed";
+            case ErrorCode::ImageViewCreationFailed: return "ImageViewCreationFailed";
         }
         return "UnknownError. Not in enum.";
     }
@@ -126,6 +139,8 @@ namespace NRE {
     class Pipeline;
     struct Model;
     class Scene;
+    class Texture;
+    struct Material;
 
     RENDERER_API Result<void> setRenderConfig(RenderConfig config);
     RENDERER_API Result<void> init();
@@ -158,6 +173,26 @@ namespace NRE {
     RENDERER_API Result<void> rotateModel(Handel<Model> model, float angle, glm::vec3 axis);
     RENDERER_API Result<void> scaleModel(Handel<Model> model, glm::vec3 factor);
 
+    // Textures and materials. Models loaded from glTF make their own; these are for adding or swapping them yourself.
+    // Loads an image file (PNG, JPEG, ...) as a color (sRGB) texture.
+    RENDERER_API Result<Handel<Texture>> createTexture(std::string path);
+    // Give the materials that use this texture another one first: they keep pointing at it.
+    RENDERER_API Result<void> destroyTexture(Handel<Texture> texture);
+    // An empty baseTexture uses the default texture. metallicTexture and normalTexture are stored but not used yet.
+    RENDERER_API Result<Handel<Material>> createMaterial(Handel<Texture> baseTexture = {},
+                                                         Handel<Texture> metallicTexture = {},
+                                                         Handel<Texture> normalTexture = {});
+    // Models still using it fall back to the default material.
+    RENDERER_API Result<void> destroyMaterial(Handel<Material> material);
+    // An empty texture uses the default texture. Waits for the GPU to finish the frames in flight, so don't call it every frame.
+    RENDERER_API Result<void> setMaterialBaseTexture(Handel<Material> material, Handel<Texture> texture);
+    // The model's material slots, in the file's material order. Empty for a model without materials (like OBJ).
+    RENDERER_API Result<std::vector<Handel<Material>>> getModelMaterials(Handel<Model> model);
+    // Makes every mesh of the model use material, replacing all of its slots.
+    RENDERER_API Result<void> setModelMaterial(Handel<Model> model, Handel<Material> material);
+    // Replaces slot index (an index into getModelMaterials), so only the meshes using that slot change.
+    RENDERER_API Result<void> replaceModelMaterial(Handel<Model> model, uint32_t index, Handel<Material> material);
+
     // Angles are in radians.
     RENDERER_API Result<void> setCameraPosition(glm::vec3 position);
     RENDERER_API Result<glm::vec3> getCameraPosition();
@@ -174,6 +209,13 @@ namespace NRE {
     RENDERER_API Result<float> getFPS();
     // Seconds between the last two presented frames. Multiply movement by this to make it frame-rate independent.
     RENDERER_API Result<float> getDeltaTime();
+
+    // Mouse input. The deltas cover the time between the last two pollEvents calls.
+    RENDERER_API Result<bool> isMouseButtonDown(MouseButton button);
+    // How far the cursor moved, in pixels. +x is right, +y is down.
+    RENDERER_API Result<glm::vec2> getMouseDelta();
+    // Scroll wheel steps. Positive means scrolling up / away from you.
+    RENDERER_API Result<float> getScrollDelta();
 
 };
 

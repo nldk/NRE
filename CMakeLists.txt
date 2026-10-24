@@ -56,6 +56,14 @@ FetchContent_Declare(
     SYSTEM
 )
 
+# stb has no releases, so pin a commit. It's header-only with no CMakeLists;
+# the stb_image target is defined below.
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG        31c1ad37456438565541f4919958214b6e762fb4
+)
+
 set(VK_BOOTSTRAP_TEST OFF CACHE BOOL "" FORCE)
 
 # GLM is header-only; skip its optional static library and tests.
@@ -69,7 +77,11 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # vk-bootstrap is a static lib that ends up inside librenderer.so, so it
 # must be compiled as position-independent code.
 set(VK_BOOTSTRAP_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(vk_bootstrap VulkanMemoryAllocator glm fastgltf tinyobjloader)
+FetchContent_MakeAvailable(vk_bootstrap VulkanMemoryAllocator glm fastgltf tinyobjloader stb)
+
+# Exactly one renderer .cpp must #define STB_IMAGE_IMPLEMENTATION before including stb_image.h.
+add_library(stb_image INTERFACE)
+target_include_directories(stb_image SYSTEM INTERFACE ${stb_SOURCE_DIR})
 
 # ---------------------------------------------------------------------------
 # Shaders: every .vert/.frag/.comp in shaders/ is compiled to build/shaders/*.spv
@@ -108,29 +120,18 @@ add_custom_target(shaders DEPENDS ${SHADER_BINARIES})
 # API header. The app looks next to itself first ($ORIGIN), and
 # LD_LIBRARY_PATH overrides that.
 # ---------------------------------------------------------------------------
+# Sources live in subsystem folders (core/, gpu/, pipeline/, scene/) and are
+# included relative to src/renderer, e.g. #include "gpu/buffer.h".
 file(GLOB_RECURSE RENDERER_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/*.h
 )
 
 add_library(renderer SHARED ${RENDERER_SOURCES}
-        src/renderer/renderer.cpp
-        src/renderer/context.h
-        src/renderer/errorHandeling.cpp
-        src/renderer/errorHandeling.h
-        src/renderer/shader.cpp
-        src/renderer/shader.h
-        src/renderer/resourceManagement.cpp
-        src/renderer/resourceManagement.h
-        src/renderer/pipeline.cpp
-        src/renderer/pipeline.h
-        src/renderer/model.cpp
-        src/renderer/model.h
-        src/renderer/buffer.cpp
-        src/renderer/buffer.h
-        src/renderer/upload.cpp
-        src/renderer/upload.h
-        src/renderer/scene.cpp
-        src/renderer/scene.h)
+        src/renderer/gpu/image.cpp
+        src/renderer/gpu/image.h
+        src/renderer/gpu/materials.cpp
+        src/renderer/gpu/materials.h)
 add_dependencies(renderer shaders)
 
 # Only symbols marked RENDERER_API are exported; vk-bootstrap, VMA and the
@@ -170,6 +171,7 @@ target_link_libraries(renderer
         GPUOpen::VulkanMemoryAllocator
         fastgltf::fastgltf
         tinyobjloader
+        stb_image
         glfw
 )
 
