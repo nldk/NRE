@@ -1,6 +1,6 @@
-#include "descriptorSet.h"
+#include "gpu/descriptorSet.h"
 
-#include "context.h"
+#include "core/context.h"
 
 namespace NRE {
     Result<void> DescriptorSetLayout::createLayout(uint32_t binding, VkDescriptorType descriptorType, uint32_t descriptorCount, VkShaderStageFlags stageFlags) {
@@ -62,6 +62,40 @@ namespace NRE {
         w.descriptorType  = type;
         w.pBufferInfo     = &bi;
         vkUpdateDescriptorSets(c->vulkan.device, 1, &w, 0, nullptr);
+        return {};
+    }
+
+    Result<void> writeImageDescriptor(VkDescriptorSet set, uint32_t binding, VkImageView view, VkSampler sampler,
+                                      VkImageLayout layout) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+
+        VkDescriptorImageInfo ii{sampler, view, layout};
+
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet          = set;
+        w.dstBinding      = binding;
+        w.descriptorCount = 1;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo      = &ii;
+        vkUpdateDescriptorSets(c->vulkan.device, 1, &w, 0, nullptr);
+        return {};
+    }
+    Result<void> DescriptorSetPool::destroy() {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+
+        vkDestroyDescriptorPool(c->vulkan.device, descriptorSetPool, nullptr);
+
+        return {};
+    }
+
+    Result<void> DescriptorSetLayout::destroy() {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+
+        vkDestroyDescriptorSetLayout(c->vulkan.device, descriptorSetLayout, nullptr);
+
         return {};
     }
 }

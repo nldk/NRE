@@ -1,7 +1,7 @@
-#include "upload.h"
+#include "gpu/upload.h"
 
-#include "context.h"
-#include "errorHandeling.h"
+#include "core/context.h"
+#include "core/errorHandling.h"
 
 namespace NRE {
     Result<void> immediateSubmit(const std::function<void(VkCommandBuffer)>& record) {

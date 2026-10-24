@@ -3,7 +3,7 @@
 #include <utility>
 #include <vulkan/vulkan_core.h>
 
-#include "errorHandeling.h"
+#include "core/errorHandling.h"
 #include "renderer.h"
 
 namespace NRE {

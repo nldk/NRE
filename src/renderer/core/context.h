@@ -3,9 +3,9 @@
 #include <vulkan/vulkan.h>
 #include "VkBootstrap.h"
 #include <vk_mem_alloc.h>
-
-#include "resourceManagement.h"
-#include "../../include/renderer.h"
+#include <vector>
+#include "core/resourceManagement.h"
+#include "renderer.h"
 namespace NRE {
     constexpr int max_frames_in_flight = 2;
     struct Frame {
@@ -14,15 +14,12 @@ namespace NRE {
         VkFence in_flight;
         VkSemaphore image_acquired;
     };
-    // Command buffer + fence for one-off GPU work outside the frame loop (e.g. copying staging buffers).
     struct UploadContext {
         VkCommandPool pool = VK_NULL_HANDLE;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
     };
-    // D32_SFLOAT is supported as a depth attachment on all desktop GPUs.
     constexpr VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
-    // Depth buffer, sized to the swapchain and recreated with it.
     struct DepthImage {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation allocation = nullptr;
@@ -47,18 +44,25 @@ namespace NRE {
         uint32_t graphicsQueueFamily = 0;
         Handel<Pipeline> pipelineBound;
         glm::mat4 projection;
+        VkSampler sampler = VK_NULL_HANDLE;
+        DescriptorSetPool   descriptorPool;
+        std::vector<DescriptorSetLayout> descriptorLayouts;
+        Handel<Texture> defaultTexture;
+        Handel<Material> defaultMaterial;
     };
     struct Window {
         GLFWwindow* window = nullptr;
         bool shouldClose = false;
-        // Set by the framebuffer-size callback. Wayland never reports OUT_OF_DATE on resize, so this is how we notice.
         bool framebufferResized = false;
+        // Mouse state, updated by pollEvents.
+        glm::dvec2 cursor{0.0};
+        glm::vec2 cursorDelta{0.0f};
+        float scrollDelta = 0.0f;
     };
-    // Frame timing, updated once per presented frame. Times are from glfwGetTime(), in seconds.
+
     struct FrameTimer {
         double lastFrameTime = 0.0;
         double deltaTime = 0.0;
-        // FPS is averaged over a window instead of 1/deltaTime, which jumps around too much to read.
         double windowStart = 0.0;
         uint32_t framesInWindow = 0;
         double fps = 0.0;

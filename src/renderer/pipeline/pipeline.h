@@ -3,7 +3,7 @@
 #include <vulkan/vulkan_core.h>
 #include <vector>
 
-#include "descriptorSet.h"
+#include "gpu/descriptorSet.h"
 #include "renderer.h"
 namespace NRE {
     struct VertexLayout {
@@ -18,7 +18,6 @@ namespace NRE {
     struct Pipeline {
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
         VkPipeline       pipeline = VK_NULL_HANDLE;
-        std::vector<DescriptorSetLayout> descriptorSetLayouts;
         Pipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader,const VertexLayout& layout = {}) {
             createPipeline(vertexShader,fragmentShader,layout);
         };

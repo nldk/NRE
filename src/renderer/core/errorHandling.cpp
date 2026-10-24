@@ -1,9 +1,9 @@
-#include "errorHandeling.h"
+#include "core/errorHandling.h"
 
 #include <iostream>
 #include <ostream>
 
-#include "context.h"
+#include "core/context.h"
 #include "renderer.h"
 #include "VkBootstrap.h"
 

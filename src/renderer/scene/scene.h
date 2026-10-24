@@ -2,7 +2,7 @@
 #include <cmath>
 #include <vector>
 
-#include "buffer.h"
+#include "gpu/buffer.h"
 #include "renderer.h"
 
 namespace NRE {

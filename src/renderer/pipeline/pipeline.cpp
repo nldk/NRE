@@ -1,6 +1,6 @@
-#include "pipeline.h"
+#include "pipeline/pipeline.h"
 
-#include "context.h"
+#include "core/context.h"
 
 namespace NRE {
     Result<void> Pipeline::createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader,const VertexLayout& layout = {}) {
@@ -66,9 +66,9 @@ namespace NRE {
         VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 
         std::vector<VkDescriptorSetLayout> descriptorLayouts;
-        descriptorLayouts.reserve(descriptorSetLayouts.size());
+        descriptorLayouts.reserve(c->vulkan.descriptorLayouts.size());
 
-        for (auto& l : descriptorSetLayouts) {
+        for (auto& l : c->vulkan.descriptorLayouts) {
             descriptorLayouts.push_back(l.getDescriptorSetLayout());
         }
 

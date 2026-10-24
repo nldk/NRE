@@ -1,8 +1,8 @@
-#include "buffer.h"
+#include "gpu/buffer.h"
 
 #include <string>
 
-#include "context.h"
+#include "core/context.h"
 
 namespace NRE {
     Result<void> Buffer::createBuffer(VkDeviceSize size,VkBufferUsageFlags usage, VmaAllocationCreateFlags allocationFlags) {

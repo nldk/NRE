@@ -1,10 +1,10 @@
-#include "shader.h"
+#include "pipeline/shader.h"
 
 #include <fstream>
 #include <vector>
 
-#include "context.h"
-#include "errorHandeling.h"
+#include "core/context.h"
+#include "core/errorHandling.h"
 
 namespace NRE {
     Result<void> Shader::create(std::string path) {

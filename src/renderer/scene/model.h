@@ -5,11 +5,12 @@
 #include <vector>
 #include <glm/glm.hpp>
 
-#include "buffer.h"
+#include "gpu/buffer.h"
 #include "renderer.h"
-#include "pipeline.h"
+#include "gpu/materials.h"
+#include "pipeline/pipeline.h"
 
-#include "scene.h"
+#include "scene/scene.h"
 
 namespace NRE {
     struct Vertex {
@@ -30,12 +31,13 @@ namespace NRE {
     struct Mesh {
         std::vector<Vertex> vertices;
         std::vector<uint32_t> indices;
-
+        uint32_t material = UINT32_MAX;
         Buffer vertexBuffer;
         Buffer indexBuffer;
     };
     struct Model {
         std::vector<Mesh> meshes;
+        std::vector<Handel<Material>> materials;
         Transform transform;
         std::vector<Handel<Scene>> scenes ;
         bool visible = true;
@@ -45,8 +47,8 @@ namespace NRE {
         void releaseGpuMeshes();
 
         Model() = default;
-        void draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, glm::mat4 viewProj);
-
+        Result<void> draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, glm::mat4 viewProj);
+        [[nodiscard]] std::vector<Handel<Material>> getMaterials() const{ return materials; };
         Model(const Model&) = delete;
         Model& operator=(const Model&) = delete;
         Model(Model&&) noexcept = default;

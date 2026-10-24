@@ -1,14 +1,18 @@
 #include <iostream>
 #include <ostream>
-#include "../../include/renderer.h"
+#include "renderer.h"
 
 #include <algorithm>
 #include <format>
 #include <memory>
-#include "errorHandeling.h"
-#include "context.h"
+#include "core/errorHandling.h"
+#include "core/context.h"
+#include "gpu/upload.h"
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
+#include "defaultAssets/defaultAssets.h"
+#include "gpu/texture.h"
+
 namespace NRE {
     namespace {std::unique_ptr<Context> globalContext = nullptr;}
     Context* context(){return globalContext.get();}
@@ -24,7 +28,7 @@ namespace NRE {
         return {};
     }
     void transition(VkCommandBuffer cmd, VkImage img, VkImageLayout from, VkImageLayout to,
-                    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
+                    VkImageAspectFlags aspect) {
         VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
         b.srcStageMask = b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
@@ -40,7 +44,7 @@ namespace NRE {
         if (d.image) vmaDestroyImage(c->vulkan.allocator, d.image, d.allocation);
         d = {};
     }
-    // (Re)creates the depth buffer at the swapchain's size. Needs the allocator, so call it after vmaCreateAllocator.
+
     Result<void> createDepthImage(Context* c) {
         destroyDepthImage(c);
         VkExtent2D e = c->vulkan.swapchain.extent;
@@ -55,7 +59,7 @@ namespace NRE {
         ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;
-        aci.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;   // render targets do best in their own allocation
+        aci.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         DepthImage& d = c->vulkan.depth;
         if (vmaCreateImage(c->vulkan.allocator, &ici, &aci, &d.image, &d.allocation, nullptr) != VK_SUCCESS) {
             d = {};
@@ -88,7 +92,11 @@ namespace NRE {
     void framebufferSizeCallback(GLFWwindow*, int, int) {
         if (auto c = context()) c->window.framebufferResized = true;
     }
-    // Called once per presented frame. Updates deltaTime every frame and the FPS (plus title) every half second.
+    // Fires during glfwPollEvents, possibly several times, so it adds up instead of overwriting.
+    void scrollCallback(GLFWwindow*, double, double yOffset) {
+        if (auto c = context()) c->window.scrollDelta += static_cast<float>(yOffset);
+    }
+
     void updateFrameTimer(Context* c) {
         constexpr double fpsWindow = 0.5;
         FrameTimer& t = c->timer;
@@ -107,34 +115,31 @@ namespace NRE {
             glfwSetWindowTitle(c->window.window, title.c_str());
         }
     }
-    // Size of the window in pixels. Can differ from the window size on scaled/HiDPI displays, and is 0x0 while minimized.
+
     VkExtent2D framebufferExtent(Context* c) {
         int width = 0, height = 0;
         glfwGetFramebufferSize(c->window.window, &width, &height);
         return {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
     }
-    // Rebuilds c->vulkan.projection for the current swapchain size. Call whenever the swapchain changes.
-    // 3D: perspective, Y up. 2D: orthographic in pixels, origin at the top-left corner and Y pointing down.
+
     void updateProjection(Context* c) {
         VkExtent2D e = c->vulkan.swapchain.extent;
-        if (e.width == 0 || e.height == 0) return;   // minimized: keep the old matrix instead of dividing by zero
+        if (e.width == 0 || e.height == 0) return;
         float width = static_cast<float>(e.width);
         float height = static_cast<float>(e.height);
         if (c->config.mode == RenderMode::Render_3D) {
             constexpr float fovY = glm::radians(60.0f), nearPlane = 0.1f, farPlane = 1000.0f;
             c->vulkan.projection = glm::perspective(fovY, width / height, nearPlane, farPlane);
-            c->vulkan.projection[1][1] *= -1;   // Vulkan's clip-space Y points down; flip so world Y is up
+            c->vulkan.projection[1][1] *= -1;
         } else {
-            // Vulkan's clip-space Y already points down, so mapping y = 0 to -1 puts it at the top edge.
-            // The depth range is wide so the camera's z position doesn't clip 2D geometry.
+
             c->vulkan.projection = glm::ortho(0.0f, width, 0.0f, height, -1000.0f, 1000.0f);
         }
     }
     Result<void> recreateSwapchain() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c, "Cannot recreate swapchain: renderer not initialized.");
-        // A minimized window has no size and a 0x0 swapchain isn't allowed. Keep the old one; the resize flag
-        // stays set, so this is tried again after the next present.
+
         VkExtent2D extent = framebufferExtent(c);
         if (extent.width == 0 || extent.height == 0) return {};
 
@@ -169,7 +174,7 @@ namespace NRE {
     Result<void> init() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c, "Renderer config not created. create with setRenderConfig.");
-        // Validation checks every Vulkan call, which costs ~60% of the frame rate, so only Debug builds turn it on.
+
 #ifdef RENDERER_ENABLE_VALIDATION
         constexpr bool enableValidation = true;
 #else
@@ -211,10 +216,18 @@ namespace NRE {
         }
         glfwSetWindowCloseCallback(c->window.window,closeCallback);
         glfwSetFramebufferSizeCallback(c->window.window,framebufferSizeCallback);
+        glfwSetScrollCallback(c->window.window,scrollCallback);
+        // Start from the real cursor position, so the first getMouseDelta isn't a jump from (0, 0).
+        glfwGetCursorPos(c->window.window, &c->window.cursor.x, &c->window.cursor.y);
         c->timer.lastFrameTime = c->timer.windowStart = glfwGetTime();
+
+        VkPhysicalDeviceFeatures f10{};
+        f10.samplerAnisotropy = VK_TRUE;
+
         VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
         f13.dynamicRendering = VK_TRUE;
         f13.synchronization2 = VK_TRUE;
+
         VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
         f12.bufferDeviceAddress = VK_TRUE;
         f12.descriptorIndexing = VK_TRUE;
@@ -223,6 +236,7 @@ namespace NRE {
         .set_minimum_version(1, 3)
         .set_required_features_13(f13)
         .set_required_features_12(f12)
+        .set_required_features(f10)
         .set_surface(c->vulkan.surface).select();
 
         if (!phys) {
@@ -310,6 +324,27 @@ namespace NRE {
         }
         if (auto depth = createDepthImage(c); !depth) return depth;
 
+        auto err = c->vulkan.descriptorPool.initDescriptorSetPool();
+        if (!err) return err;
+
+        err = Texture::createSampler();
+        if (!err) return err;
+
+        auto materialLayout = DescriptorSetLayout();
+        err = materialLayout.createLayout(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT);
+        if (!err) return err;
+        c->vulkan.descriptorLayouts.push_back(materialLayout);
+
+        Texture defaultTexture;
+        err = defaultTexture.loadTextureFromMemory(DefaultAssets::defaultTexturePng,sizeof(DefaultAssets::defaultTexturePng));
+        if (!err) return err;
+        c->vulkan.defaultTexture = c->manager.create(std::move(defaultTexture));
+        Material defaultMaterial;
+        defaultMaterial.baseTexture = c->vulkan.defaultTexture;
+        err = defaultMaterial.createDescriptorSet();
+        if (!err) return err;
+        c->vulkan.defaultMaterial = c->manager.create(std::move(defaultMaterial));
+
         return {};
     }
 
@@ -318,6 +353,15 @@ namespace NRE {
         NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
         vkDeviceWaitIdle(c->vulkan.device);
         c->manager.destroyAll();
+        auto  err = Texture::destroySampler();
+        if (!err) return err;
+
+        err = c->vulkan.descriptorPool.destroy();
+        if (!err) return err;
+        for (auto& layout : c->vulkan.descriptorLayouts) {
+            err = layout.destroy();
+            if (!err) return err;
+        }
         destroyDepthImage(c);
         vmaDestroyAllocator(c->vulkan.allocator);
         for (Frame& f : c->vulkan.frames) {
@@ -378,8 +422,8 @@ namespace NRE {
         depth.imageView = c->vulkan.depth.view;
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;   // only needed during this frame
-        depth.clearValue.depthStencil = {1.0f, 0};           // 1.0 = far plane, so anything drawn is closer
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth.clearValue.depthStencil = {1.0f, 0};
         ri.pDepthAttachment = &depth;
         vkCmdBeginRendering(f.cmd,&ri);
 
@@ -391,8 +435,6 @@ namespace NRE {
         vkCmdSetViewport(f.cmd, 0, 1, &viewport);
         vkCmdSetScissor(f.cmd, 0, 1, &scissor);
 
-        // Without a bound scene the frame is only cleared. The error is returned after the frame is
-        // finished: returning here would leave the fence reset and the next renderFrame waiting forever.
         bool noScene = false;
         if (Scene* scene = c->manager.get(c->currentScene)) {
             (void)scene->draw(f.cmd);
@@ -453,7 +495,12 @@ namespace NRE {
     Result<void> pollEvents() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        c->window.scrollDelta = 0.0f;   // scrollCallback adds this frame's scrolling during glfwPollEvents
         glfwPollEvents();
+        glm::dvec2 cursor;
+        glfwGetCursorPos(c->window.window, &cursor.x, &cursor.y);
+        c->window.cursorDelta = glm::vec2(cursor - c->window.cursor);
+        c->window.cursor = cursor;
         return {};
     }
     Result<Handel<Shader>> createShader(std::string shaderPath,ShaderType type) {
@@ -689,5 +736,110 @@ namespace NRE {
         return static_cast<float>(c->timer.deltaTime);
     }
 
+    Result<bool> isMouseButtonDown(MouseButton button) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        static_assert(int(MouseButton::Left) == GLFW_MOUSE_BUTTON_LEFT && int(MouseButton::Right) == GLFW_MOUSE_BUTTON_RIGHT
+                      && int(MouseButton::Middle) == GLFW_MOUSE_BUTTON_MIDDLE);
+        return glfwGetMouseButton(c->window.window, int(button)) == GLFW_PRESS;
+    }
+
+    Result<glm::vec2> getMouseDelta() {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        return c->window.cursorDelta;
+    }
+
+    Result<float> getScrollDelta() {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        return c->window.scrollDelta;
+    }
+
+    namespace {
+        Result<Material*> getMaterial(Handel<Material> handle) {
+            auto c = context();
+            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+            Material* material = c->manager.get(handle);
+            if (!material) {
+                auto error = Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to material out of date or non-existing"};
+                ErrorHandeling::handleError(error);
+                return std::unexpected(error);
+            }
+            return material;
+        }
+    }
+
+    Result<Handel<Texture>> createTexture(std::string path) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        Texture texture;
+        if (auto loaded = texture.loadTexture(path); !loaded) return std::unexpected(loaded.error());
+        // With RenderErrorPolicy::Ignore a failed load returns success without an image; the empty handle
+        // makes materials fall back to the default texture.
+        if (texture.getView() == VK_NULL_HANDLE) return Handel<Texture>{};
+        return c->manager.create(std::move(texture));
+    }
+
+    Result<void> destroyTexture(Handel<Texture> texture) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        c->manager.destroy(texture);
+        return {};
+    }
+
+    Result<void> destroyMaterial(Handel<Material> material) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        // The descriptor set stays allocated: the pool can't free single sets.
+        c->manager.destroy(material);
+        return {};
+    }
+
+    Result<void> setMaterialBaseTexture(Handel<Material> material, Handel<Texture> texture) {
+        auto m = getMaterial(material);
+        if (!m) return std::unexpected(m.error());
+        auto c = context();
+        Handel<Texture> base = texture == Handel<Texture>{} ? c->vulkan.defaultTexture : texture;
+        Texture* t = c->manager.get(base);
+        if (!t) {
+            auto error = Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to texture out of date or non-existing"};
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);
+        }
+        // Frames in flight may still be reading this set, and a set can't change while the GPU uses it.
+        vkDeviceWaitIdle(c->vulkan.device);
+        (*m)->baseTexture = base;
+        return writeImageDescriptor((*m)->descriptorSet, 0, t->getView(), c->vulkan.sampler);
+    }
+
+    Result<std::vector<Handel<Material>>> getModelMaterials(Handel<Model> model) {
+        return getModel(model).transform([](Model* m) { return m->materials; });
+    }
+
+    Result<void> setModelMaterial(Handel<Model> model, Handel<Material> material) {
+        auto mat = getMaterial(material);
+        if (!mat) return std::unexpected(mat.error());
+        return getModel(model).transform([&](Model* m) {
+            // The old materials stay in the resource manager; other models may be using them.
+            m->materials = {material};
+            for (Mesh& mesh : m->meshes) mesh.material = 0;
+        });
+    }
+
+    Result<void> replaceModelMaterial(Handel<Model> model, uint32_t index, Handel<Material> material) {
+        auto mat = getMaterial(material);
+        if (!mat) return std::unexpected(mat.error());
+        auto m = getModel(model);
+        if (!m) return std::unexpected(m.error());
+        if (index >= (*m)->materials.size()) {
+            auto error = Error{ErrorCode::IndexOutOfRange,"Material slot " + std::to_string(index) + " doesn't exist; the model has "
+                               + std::to_string((*m)->materials.size()) + "."};
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);
+        }
+        (*m)->materials[index] = material;
+        return {};
+    }
 }
 

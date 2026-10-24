@@ -1,8 +1,8 @@
-#include "scene.h"
+#include "scene/scene.h"
 
 #include <algorithm>
 
-#include "context.h"
+#include "core/context.h"
 
 namespace NRE {
     void Scene::addModel(Handel<Model> model) {
