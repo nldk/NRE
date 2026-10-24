@@ -138,7 +138,9 @@ add_library(renderer SHARED ${RENDERER_SOURCES}
         src/renderer/gpu/image.cpp
         src/renderer/gpu/image.h
         src/renderer/gpu/materials.cpp
-        src/renderer/gpu/materials.h)
+        src/renderer/gpu/materials.h
+        src/renderer/gpu/UBOAndSSBO.cpp
+        src/renderer/gpu/UBOAndSSBO.h)
 add_dependencies(renderer shaders)
 
 # Only symbols marked RENDERER_API are exported; vk-bootstrap, VMA and the

@@ -6,8 +6,8 @@
 #include <vector>
 #include "core/resourceManagement.h"
 #include "renderer.h"
+#include "core/frames.h"
 namespace NRE {
-    constexpr int max_frames_in_flight = 2;
     struct Frame {
         VkCommandPool pool;
         VkCommandBuffer cmd;

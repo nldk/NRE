@@ -56,6 +56,9 @@ namespace NRE {
         ImageCreationFailed,
         ImageViewCreationFailed,
         IndexOutOfRange,
+        ImpossibleTypeForPerFrameBuffer,
+        BufferWithSizeNull,
+        SizeOfBufferToBig,
         UnknownError,
     };
     struct WindowConfig {
@@ -102,6 +105,9 @@ namespace NRE {
             case ErrorCode::ErrorCreatingTexture:return "ErrorCreatingTexture";
             case ErrorCode::ImageCreationFailed: return "ImageCreationFailed";
             case ErrorCode::ImageViewCreationFailed: return "ImageViewCreationFailed";
+            case ErrorCode::ImpossibleTypeForPerFrameBuffer: return "ImpossibleTypeForPerFrameBuffer";
+            case ErrorCode::BufferWithSizeNull: return "BufferWithSizeNull";
+            case ErrorCode::SizeOfBufferToBig: return "SizeOfBufferToBig";
         }
         return "UnknownError. Not in enum.";
     }
