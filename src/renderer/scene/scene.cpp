@@ -5,12 +5,12 @@
 #include "core/context.h"
 
 namespace NRE {
-    void Scene::addModel(Handel<Model> model) {
-        if (std::ranges::find(models, model) == models.end()) models.push_back(model);
+    void Scene::addInstance(Handel<Instance> instance) {
+        if (std::ranges::find(instances, instance) == instances.end()) instances.push_back(instance);
     }
 
-    void Scene::removeModel(Handel<Model> model) {
-        std::erase(models, model);
+    void Scene::removeInstance(Handel<Instance> instance) {
+        std::erase(instances, instance);
     }
     Result<void> Scene::draw(VkCommandBuffer commandBuffer) {
         auto c = context();
@@ -23,12 +23,12 @@ namespace NRE {
         }
         auto viewProjection = c->vulkan.projection * camera.viewMatrix();
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
-        for (auto& modelHandel : models) {
-            auto model = c->manager.get(modelHandel);
-            if (!model) {
-                continue;
-            }
-            model->draw(commandBuffer,*pipeline,viewProjection);
+        for (Handel<Instance> instanceHandel : instances) {
+            Instance* instance = c->manager.get(instanceHandel);
+            if (!instance || !instance->visible) continue;
+            Model* model = c->manager.get(instance->model);
+            if (!model) continue;
+            (void)model->draw(commandBuffer,*pipeline,instance->transform.matrix(),viewProjection);
         }
         return {};
     }

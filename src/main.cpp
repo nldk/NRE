@@ -36,21 +36,22 @@ int main() {
     setRenderConfig({RenderMode::Render_3D,RenderErrorPolicy::Ignore,false,{500,500,"test",true}});
     init();
     auto model = createModel(ASSET_DIR "/police.glb").value();
+    auto car = createInstance(model).value();
     auto vertex = createShader(SHADER_DIR "/vertex.vert.spv",ShaderType::VERTEX_SHADER).value();
     auto frag = createShader(SHADER_DIR "/fragment.frag.spv",ShaderType::FRAGMENT_SHADER).value();
     auto pipeline = createPipeline(vertex,frag).value();
     bindPipeline(pipeline);
     auto scene = createScene();
-    addModelToScene(model);
-    translateModel(model,glm::vec3(0.0f,0.0f,-1.0f));
+    addInstanceToScene(car);
+    translateInstance(car,glm::vec3(0.0f,0.0f,-1.0f));
 
     OrbitCamera camera;
-    camera.target = getModelTransform(model).value().position;
+    camera.target = getInstanceTransform(car).value().position;
     while (!windowShouldClose().value()) {
         pollEvents();
         camera.update();
         renderFrame();
-        rotateModel(model,0.0001f,glm::vec3(0.0f,1.0f,0.0f));
+        rotateInstance(car,0.0001f,glm::vec3(0.0f,1.0f,0.0f));
     }
     shutdown();
     return 0;

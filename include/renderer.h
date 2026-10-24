@@ -138,6 +138,7 @@ namespace NRE {
     struct Shader;
     class Pipeline;
     struct Model;
+    struct Instance;
     class Scene;
     class Texture;
     struct Material;
@@ -155,25 +156,33 @@ namespace NRE {
     RENDERER_API Result<Handel<Pipeline>> createPipeline(Handel<Shader> vertexShader,Handel<Shader> fragmentShader);
     RENDERER_API Result<void> destroyPipeline(Handel<Pipeline> pipeline);
     RENDERER_API Result<void> bindPipeline(Handel<Pipeline> pipeline);
+    // A Model is the loaded file (meshes, GPU buffers, materials) and isn't drawn by itself.
+    // Draw it through instances: each one is a copy with its own transform, and they all share the model's data.
     RENDERER_API Result<Handel<Model>> createModel(std::string modelPath);
+    // Instances of a destroyed model stay valid but draw nothing.
     RENDERER_API Result<void> destroyModel(Handel<Model> model);
-    RENDERER_API Result<void> setModelTransform(Handel<Model> model, const Transform& transform);
-    RENDERER_API Result<Transform> getModelTransform(Handel<Model> model);
-    RENDERER_API Result<glm::mat4> getModelMatrix(Handel<Model> model);
-    RENDERER_API Result<void> translateModel(Handel<Model> model, glm::vec3 offset);
-    RENDERER_API Result<void> setVisibility(Handel<Model> model, bool visible);
+    RENDERER_API Result<Handel<Instance>> createInstance(Handel<Model> model);
+    // Also removes it from every scene it's in.
+    RENDERER_API Result<void> destroyInstance(Handel<Instance> instance);
+    RENDERER_API Result<void> setInstanceTransform(Handel<Instance> instance, const Transform& transform);
+    RENDERER_API Result<Transform> getInstanceTransform(Handel<Instance> instance);
+    RENDERER_API Result<glm::mat4> getInstanceMatrix(Handel<Instance> instance);
+    RENDERER_API Result<void> translateInstance(Handel<Instance> instance, glm::vec3 offset);
+    // Angle is in radians.
+    RENDERER_API Result<void> rotateInstance(Handel<Instance> instance, float angle, glm::vec3 axis);
+    RENDERER_API Result<void> scaleInstance(Handel<Instance> instance, glm::vec3 factor);
+    // A hidden instance stays in its scenes but isn't drawn.
+    RENDERER_API Result<void> setVisibility(Handel<Instance> instance, bool visible);
     RENDERER_API Result<Handel<Scene>> createScene();
     RENDERER_API Result<void> destroyScene(Handel<Scene> scene);
     RENDERER_API Result<void> bindScene(Handel<Scene> scene);
     RENDERER_API Result<Handel<Scene>> getBoundScene();
-    // Add to / remove from the bound scene. Adding a model that's already in it does nothing.
-    RENDERER_API Result<void> addModelToScene(Handel<Model> model);
-    RENDERER_API Result<void> removeModelFromScene(Handel<Model> model);
-    //Angle is in radians.
-    RENDERER_API Result<void> rotateModel(Handel<Model> model, float angle, glm::vec3 axis);
-    RENDERER_API Result<void> scaleModel(Handel<Model> model, glm::vec3 factor);
+    // Add to / remove from the bound scene. Adding an instance that's already in it does nothing.
+    RENDERER_API Result<void> addInstanceToScene(Handel<Instance> instance);
+    RENDERER_API Result<void> removeInstanceFromScene(Handel<Instance> instance);
 
     // Textures and materials. Models loaded from glTF make their own; these are for adding or swapping them yourself.
+    // Materials belong to the model, so changing one changes every instance of that model.
     // Loads an image file (PNG, JPEG, ...) as a color (sRGB) texture.
     RENDERER_API Result<Handel<Texture>> createTexture(std::string path);
     // Give the materials that use this texture another one first: they keep pointing at it.

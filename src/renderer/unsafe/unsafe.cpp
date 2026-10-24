@@ -72,4 +72,10 @@ namespace NRE::Unsafe {
     VkFormat getDepthFormat() {
         return depthFormat;
     }
+    Result<void> registerFrameCallback(void (*frameCallback)(VkCommandBuffer commandBuffer)) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c,"Renderer not initialized. Initialize with init.");
+        c->unsafeContext.frameCallback = frameCallback;
+        return {};
+    }
 }

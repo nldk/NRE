@@ -54,7 +54,7 @@ namespace NRE {
         GLFWwindow* window = nullptr;
         bool shouldClose = false;
         bool framebufferResized = false;
-        // Mouse state, updated by pollEvents.
+
         glm::dvec2 cursor{0.0};
         glm::vec2 cursorDelta{0.0f};
         float scrollDelta = 0.0f;
@@ -67,6 +67,11 @@ namespace NRE {
         uint32_t framesInWindow = 0;
         double fps = 0.0;
     };
+#ifdef NRE_UNSAFE_API
+    struct UnsafeContext {
+          void (*frameCallback)(VkCommandBuffer) = nullptr;
+    };
+#endif
     struct Context {
         RenderConfig config;
         Window window;
@@ -74,6 +79,9 @@ namespace NRE {
         VulkanContext vulkan;
         ResourceManager manager;
         Handel<Scene> currentScene;
+        #ifdef NRE_UNSAFE_API
+        UnsafeContext unsafeContext;
+        #endif
     };
     Context* context();
 }

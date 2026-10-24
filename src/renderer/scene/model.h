@@ -35,19 +35,18 @@ namespace NRE {
         Buffer vertexBuffer;
         Buffer indexBuffer;
     };
+
     struct Model {
         std::vector<Mesh> meshes;
         std::vector<Handel<Material>> materials;
-        Transform transform;
-        std::vector<Handel<Scene>> scenes ;
-        bool visible = true;
 
         Result<void> uploadMeshes();
 
         void releaseGpuMeshes();
 
         Model() = default;
-        Result<void> draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, glm::mat4 viewProj);
+
+        Result<void> draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix, const glm::mat4& viewProj);
         [[nodiscard]] std::vector<Handel<Material>> getMaterials() const{ return materials; };
         Model(const Model&) = delete;
         Model& operator=(const Model&) = delete;
@@ -55,5 +54,11 @@ namespace NRE {
         Model& operator=(Model&&) noexcept = default;
     };
 
+    struct Instance {
+        Handel<Model> model;
+        Transform transform;
+        bool visible = true;
+        std::vector<Handel<Scene>> scenes;
+    };
     Result<Model> loadModel(const std::string& path);
 }

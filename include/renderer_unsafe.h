@@ -27,6 +27,8 @@ namespace NRE::Unsafe {
     RENDERER_API VkQueue getGraphicsQueue();
     RENDERER_API uint32_t getGraphicsQueueFamily();
     RENDERER_API VmaAllocator_T* getAllocator();
+    RENDERER_API Result<void> registerFrameCallback(void (*frameCallback)(VkCommandBuffer commandBuffer));
+
     // The sampler every texture uses.
     RENDERER_API VkSampler getSampler();
 
@@ -36,6 +38,7 @@ namespace NRE::Unsafe {
     RENDERER_API VkExtent2D getSwapchainExtent();
     RENDERER_API uint32_t getSwapchainImageCount();
     RENDERER_API VkFormat getDepthFormat();
+
 }
 
 #endif //VULKANRENDERER_RENDERER_UNSAFE_H

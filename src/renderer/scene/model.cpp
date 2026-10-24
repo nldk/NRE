@@ -296,10 +296,10 @@ namespace NRE {
             (void)mesh.indexBuffer.destroyBuffer();
         }
     }
-    Result<void> Model::draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, glm::mat4 viewProj) {
+    Result<void> Model::draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix, const glm::mat4& viewProj) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
-        PushConstants pc{transform.matrix(), viewProj};
+        PushConstants pc{modelMatrix, viewProj};
         vkCmdPushConstants(commandBuffer, pipeline.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
         0, sizeof(pc), &pc);
         uint32_t materialCount = materials.size();

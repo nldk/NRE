@@ -6,14 +6,14 @@
 #include "renderer.h"
 
 namespace NRE {
-    // Fly camera: a position plus yaw/pitch. Y is up and yaw = pitch = 0 looks down -Z, matching glTF.
+
     struct Camera {
         static constexpr glm::vec3 worldUp{0.0f, 1.0f, 0.0f};
-        static constexpr float maxPitch = 1.5533430f;   // 89 degrees; at 90 the view flips
+        static constexpr float maxPitch = 1.5533430f;
 
         glm::vec3 position{0.0f, 0.0f, 3.0f};
         float yaw = 0.0f;     // radians, positive turns right
-        float pitch = 0.0f;   // radians, positive looks up, kept within ±maxPitch
+        float pitch = 0.0f;   // radians, positive looks up
 
         glm::vec3 forward() const {
             return {std::cos(pitch) * std::sin(yaw), std::sin(pitch), -std::cos(pitch) * std::cos(yaw)};
@@ -40,13 +40,13 @@ namespace NRE {
         }
     };
     class Scene {
-        std::vector<Handel<Model>> models;
+        std::vector<Handel<Instance>> instances;
     public:
         Camera camera;
-        // Does nothing if the model is already in the scene.
-        void addModel(Handel<Model> model);
-        void removeModel(Handel<Model> model);
-        const std::vector<Handel<Model>>& getModels() const { return models; }
+        // Does nothing if the instance is already in the scene.
+        void addInstance(Handel<Instance> instance);
+        void removeInstance(Handel<Instance> instance);
+        const std::vector<Handel<Instance>>& getInstances() const { return instances; }
         Result<void> draw(VkCommandBuffer commandBuffer);
     };
 }

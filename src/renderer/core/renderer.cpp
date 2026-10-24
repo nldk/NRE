@@ -441,9 +441,13 @@ namespace NRE {
         } else {
             noScene = ErrorHandeling::handleError(Error{ErrorCode::NoSceneBound,"No scene was bound. Create one with createScene or bind one with bindScene."});
         }
+        #ifdef  NRE_UNSAFE_API
+        if (c->unsafeContext.frameCallback) {
+            c->unsafeContext.frameCallback(f.cmd);
+        }
+        #endif
 
         vkCmdEndRendering(f.cmd);
-
         transition(f.cmd,c->vulkan.images[c->vulkan.currentImageIndex],VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
         vkEndCommandBuffer(f.cmd);
         if (!c->config.manualFramePresentationAndSubmission) {
@@ -556,11 +560,11 @@ namespace NRE {
     Result<void> destroyModel(Handel<Model> model) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        // Instances keep the stale handle; Scene::draw skips them.
         if (Model* m = c->manager.get(model)) {
+            // Frames in flight may still be reading the vertex/index buffers.
+            vkDeviceWaitIdle(c->vulkan.device);
             m->releaseGpuMeshes();
-            for (Handel<Scene> scene : m->scenes) {
-                if (Scene* s = c->manager.get(scene)) s->removeModel(model);
-            }
         }
         c->manager.destroy(model);
         return {};
@@ -578,32 +582,65 @@ namespace NRE {
             }
             return model;
         }
+
+        Result<Instance*> getInstance(Handel<Instance> handle) {
+            auto c = context();
+            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+            Instance* instance = c->manager.get(handle);
+            if (!instance) {
+                auto error = Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to instance out of date or non-existing"};
+                ErrorHandeling::handleError(error);
+                return std::unexpected(error);
+            }
+            return instance;
+        }
     }
 
-    Result<void> setModelTransform(Handel<Model> model, const Transform& transform) {
-        return getModel(model).transform([&](Model* m) { m->transform = transform; });
+    Result<Handel<Instance>> createInstance(Handel<Model> model) {
+        auto m = getModel(model);
+        if (!m) return std::unexpected(m.error());
+        return context()->manager.create(Instance{model});
     }
 
-    Result<Transform> getModelTransform(Handel<Model> model) {
-        return getModel(model).transform([](Model* m) { return m->transform; });
+    Result<void> destroyInstance(Handel<Instance> instance) {
+        auto i = getInstance(instance);
+        if (!i) return std::unexpected(i.error());
+        auto c = context();
+        for (Handel<Scene> scene : (*i)->scenes) {
+            if (Scene* s = c->manager.get(scene)) s->removeInstance(instance);
+        }
+        c->manager.destroy(instance);
+        return {};
     }
 
-    Result<glm::mat4> getModelMatrix(Handel<Model> model) {
-        return getModel(model).transform([](Model* m) { return m->transform.matrix(); });
+    Result<void> setInstanceTransform(Handel<Instance> instance, const Transform& transform) {
+        return getInstance(instance).transform([&](Instance* i) { i->transform = transform; });
     }
 
-    Result<void> translateModel(Handel<Model> model, glm::vec3 offset) {
-        return getModel(model).transform([&](Model* m) { m->transform.position += offset; });
+    Result<Transform> getInstanceTransform(Handel<Instance> instance) {
+        return getInstance(instance).transform([](Instance* i) { return i->transform; });
     }
 
-    Result<void> rotateModel(Handel<Model> model, float angle, glm::vec3 axis) {
-        return getModel(model).transform([&](Model* m) {
-            m->transform.rotation = glm::normalize(glm::angleAxis(angle, glm::normalize(axis)) * m->transform.rotation);
+    Result<glm::mat4> getInstanceMatrix(Handel<Instance> instance) {
+        return getInstance(instance).transform([](Instance* i) { return i->transform.matrix(); });
+    }
+
+    Result<void> translateInstance(Handel<Instance> instance, glm::vec3 offset) {
+        return getInstance(instance).transform([&](Instance* i) { i->transform.position += offset; });
+    }
+
+    Result<void> rotateInstance(Handel<Instance> instance, float angle, glm::vec3 axis) {
+        return getInstance(instance).transform([&](Instance* i) {
+            i->transform.rotation = glm::normalize(glm::angleAxis(angle, glm::normalize(axis)) * i->transform.rotation);
         });
     }
 
-    Result<void> scaleModel(Handel<Model> model, glm::vec3 factor) {
-        return getModel(model).transform([&](Model* m) { m->transform.scale *= factor; });
+    Result<void> scaleInstance(Handel<Instance> instance, glm::vec3 factor) {
+        return getInstance(instance).transform([&](Instance* i) { i->transform.scale *= factor; });
+    }
+
+    Result<void> setVisibility(Handel<Instance> instance, bool visible) {
+        return getInstance(instance).transform([&](Instance* i) { i->visible = visible; });
     }
 
     namespace {
@@ -646,8 +683,8 @@ namespace NRE {
         auto s = getScene(scene);
         if (!s) return std::unexpected(s.error());
         auto c = context();
-        for (Handel<Model> model : (*s)->getModels()) {
-            if (Model* m = c->manager.get(model)) std::erase(m->scenes, scene);
+        for (Handel<Instance> instance : (*s)->getInstances()) {
+            if (Instance* i = c->manager.get(instance)) std::erase(i->scenes, scene);
         }
         if (c->currentScene == scene) c->currentScene = {};
         c->manager.destroy(scene);
@@ -662,24 +699,24 @@ namespace NRE {
         return getBoundScenePtr().transform([](Scene*) { return context()->currentScene; });
     }
 
-    Result<void> addModelToScene(Handel<Model> model) {
+    Result<void> addInstanceToScene(Handel<Instance> instance) {
         auto s = getBoundScenePtr();
         if (!s) return std::unexpected(s.error());
-        auto m = getModel(model);
-        if (!m) return std::unexpected(m.error());
+        auto i = getInstance(instance);
+        if (!i) return std::unexpected(i.error());
         Handel<Scene> scene = context()->currentScene;
-        (*s)->addModel(model);
-        if (std::ranges::find((*m)->scenes, scene) == (*m)->scenes.end()) (*m)->scenes.push_back(scene);
+        (*s)->addInstance(instance);
+        if (std::ranges::find((*i)->scenes, scene) == (*i)->scenes.end()) (*i)->scenes.push_back(scene);
         return {};
     }
 
-    Result<void> removeModelFromScene(Handel<Model> model) {
+    Result<void> removeInstanceFromScene(Handel<Instance> instance) {
         auto s = getBoundScenePtr();
         if (!s) return std::unexpected(s.error());
-        auto m = getModel(model);
-        if (!m) return std::unexpected(m.error());
-        (*s)->removeModel(model);
-        std::erase((*m)->scenes, context()->currentScene);
+        auto i = getInstance(instance);
+        if (!i) return std::unexpected(i.error());
+        (*s)->removeInstance(instance);
+        std::erase((*i)->scenes, context()->currentScene);
         return {};
     }
 
