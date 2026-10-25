@@ -2,6 +2,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include <filesystem>
+#include <string>
+
 #include "buffer.h"
 #include "renderer.h"
 #include "upload.h"
@@ -10,10 +13,17 @@
 
 namespace NRE {
     Result<void> Texture::loadTexture(std::string path) {
+        if (!std::filesystem::exists(path)) {
+            auto error = Error{ErrorCode::FileNotFound, "Texture file not found: '" + std::filesystem::absolute(path).string() + "'"};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};
+        }
         int w, h, channels;
         stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
         if (!pixels) {
-            auto error = Error(ErrorCode::ErrorCreatingTexture,stbi_failure_reason());
+            // stb's reasons are terse ("bad png sig", "unknown image type"), so say which file it was.
+            auto error = Error(ErrorCode::ErrorCreatingTexture, "Failed to load texture '" + path + "': "
+                               + stbi_failure_reason() + " (supported: PNG, JPEG, BMP, TGA, PSD, GIF, HDR, PIC, PNM)");
                 if (ErrorHandeling::handleError(error)) {
                     return std::unexpected(error);
                 }
@@ -28,7 +38,8 @@ namespace NRE {
         int w, h, channels;
         stbi_uc* pixels = stbi_load_from_memory(data, int(size), &w, &h, &channels, STBI_rgb_alpha);
         if (!pixels) {
-            auto error = Error(ErrorCode::ErrorCreatingTexture,stbi_failure_reason());
+            auto error = Error(ErrorCode::ErrorCreatingTexture, "Failed to decode an embedded image (" + std::to_string(size)
+                               + " bytes): " + stbi_failure_reason());
                 if (ErrorHandeling::handleError(error)) {
                     return std::unexpected(error);
                 }
@@ -73,7 +84,7 @@ namespace NRE {
 
     Result<void> Texture::createSampler() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c,"Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
 
         float maxAniso = c->vulkan.physicalDevice.properties.limits.maxSamplerAnisotropy;
 
@@ -89,12 +100,17 @@ namespace NRE {
         samplerInfo.anisotropyEnable = VK_TRUE;
         samplerInfo.maxAnisotropy = std::min(16.0f, maxAniso);
 
-        vkCreateSampler(c->vulkan.device,&samplerInfo,nullptr,&c->vulkan.sampler);
+        if (VkResult r = vkCreateSampler(c->vulkan.device,&samplerInfo,nullptr,&c->vulkan.sampler); r != VK_SUCCESS) {
+            c->vulkan.sampler = VK_NULL_HANDLE;
+            auto error = Error{ErrorCode::ErrorCreatingTexture, "init(): failed to create the texture sampler: "
+                               + std::string(ErrorHandeling::vkResultName(r))};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+        }
         return {};
     }
     Result<VkDescriptorSet> Texture::createDescriptorSet() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c,"Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         auto set = c->vulkan.descriptorPool.allocateDescriptorSet(c->vulkan.descriptorLayouts[1]);   // the material layout
         if (!set) return set;
         auto err = writeImageDescriptor(*set,0,image.getView(),c->vulkan.sampler);
@@ -103,7 +119,7 @@ namespace NRE {
     }
     Result<void> Texture::createTexture(std::string path) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c,"Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         auto err = loadTexture(path);
         if (!err) return err;
         return {};
@@ -111,7 +127,7 @@ namespace NRE {
 
     Result<void> Texture::destroySampler() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c,"Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         vkDestroySampler(c->vulkan.device,c->vulkan.sampler,nullptr);
         return {};
     }

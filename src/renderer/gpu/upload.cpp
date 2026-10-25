@@ -3,10 +3,12 @@
 #include "core/context.h"
 #include "core/errorHandling.h"
 
+#include <string>
+
 namespace NRE {
     Result<void> immediateSubmit(const std::function<void(VkCommandBuffer)>& record) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized");
+        NRE_REQUIRE_CONTEXT(c);
         UploadContext& u = c->vulkan.upload;
         vkResetCommandBuffer(u.cmd, 0);
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -20,10 +22,10 @@ namespace NRE {
         VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
         si.commandBufferInfoCount = 1;
         si.pCommandBufferInfos = &cbi;
-        if (vkQueueSubmit2(c->vulkan.graphicsQueue, 1, &si, u.fence) != VK_SUCCESS) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::UploadFailed,"Failed to submit upload commands."})) {
-                return std::unexpected(Error{ErrorCode::UploadFailed,"Failed to submit upload commands."});
-            };
+        if (VkResult r = vkQueueSubmit2(c->vulkan.graphicsQueue, 1, &si, u.fence); r != VK_SUCCESS) {
+            auto error = Error{ErrorCode::UploadFailed, "Failed to submit a GPU upload (texture or mesh data): "
+                               + std::string(ErrorHandeling::vkResultName(r))};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
             return {};
         }
         vkWaitForFences(c->vulkan.device, 1, &u.fence, VK_TRUE, UINT64_MAX);

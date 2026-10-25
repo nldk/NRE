@@ -1,6 +1,8 @@
 #include "pipeline/shader.h"
 
 #include <fstream>
+#include <string>
+#include <filesystem>
 #include <vector>
 
 #include "core/context.h"
@@ -9,26 +11,42 @@
 namespace NRE {
     Result<void> Shader::create(std::string path) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized");
+        NRE_REQUIRE_CONTEXT(c);
         std::ifstream ifs(path,std::ios::binary | std::ios::ate);
         if (!ifs.is_open()) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::FileNotFound,"File " + path + " not found"})) {
-                return std::unexpected(Error{ErrorCode::FileNotFound,"File " + path + " not found"});
-            };
+            auto error = Error{ErrorCode::FileNotFound, "createShader(): shader file not found: '"
+                               + std::filesystem::absolute(path).string() + "'"};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};
         }
         size_t size = ifs.tellg();
+        // SPIR-V is a list of 32-bit words starting with the magic number 0x07230203.
+        uint32_t magic = 0;
+        ifs.seekg(0);
+        ifs.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+        if (size == 0 || size % 4 != 0 || magic != 0x07230203) {
+            auto error = Error{ErrorCode::UnsupportedFormat, "createShader(): '" + path + "' isn't compiled SPIR-V. "
+                               "Pass the .spv file glslc produces (e.g. vertex.vert.spv), not the GLSL source."};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};
+        }
         std::vector<uint32_t> code(size / sizeof(uint32_t));
         ifs.seekg(0);
         ifs.read(reinterpret_cast<char*>(code.data()), size);
         VkShaderModuleCreateInfo info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         info.codeSize = size;
         info.pCode = code.data();
-        vkCreateShaderModule(c->vulkan.device, &info, nullptr, &shader);
+        if (VkResult r = vkCreateShaderModule(c->vulkan.device, &info, nullptr, &shader); r != VK_SUCCESS) {
+            shader = VK_NULL_HANDLE;
+            auto error = Error{ErrorCode::ShaderCreationFailed, "createShader(): failed to create a shader module from '"
+                               + path + "': " + std::string(ErrorHandeling::vkResultName(r))};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+        }
         return {};
     }
     Result<void> Shader::destroy() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized");
+        NRE_REQUIRE_CONTEXT(c);
         if (shader) {
             vkDestroyShaderModule(c->vulkan.device, shader, nullptr);
         }

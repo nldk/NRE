@@ -1,22 +1,23 @@
 #include "pipeline/pipeline.h"
 
 #include "core/context.h"
+#include "core/errorHandling.h"
 
 namespace NRE {
     Result<void> Pipeline::createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader,const VertexLayout& layout = {}) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized");
+        NRE_REQUIRE_CONTEXT(c);
         auto vertex = c->manager.get(vertexShader);
         if (!vertex) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"})) {
-                return std::unexpected(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"});
-            };
+            auto error = ErrorHandeling::badHandle("vertex shader", vertexShader, "createShader()", std::source_location::current());
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};   // no pipeline without shaders
         }
         auto fragment = c->manager.get(fragmentShader);
-        if (!vertex) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to fragment shader out of date or non-existing"})) {
-                return std::unexpected(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to fragment shader out of date or non-existing"});
-            };
+        if (!fragment) {
+            auto error = ErrorHandeling::badHandle("fragment shader", fragmentShader, "createShader()", std::source_location::current());
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};
         }
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr,0, VK_SHADER_STAGE_VERTEX_BIT, vertex->shader, "main"};
@@ -78,7 +79,13 @@ namespace NRE {
         plci.pPushConstantRanges = &pcr;
         plci.pushConstantRangeCount = 1;
 
-        vkCreatePipelineLayout(c->vulkan.device, &plci, nullptr, &pipelineLayout);
+        if (VkResult r = vkCreatePipelineLayout(c->vulkan.device, &plci, nullptr, &pipelineLayout); r != VK_SUCCESS) {
+            pipelineLayout = VK_NULL_HANDLE;
+            auto error = Error{ErrorCode::ErrorCreatingPipeline, "createPipeline(): failed to create the pipeline layout: "
+                               + std::string(ErrorHandeling::vkResultName(r))};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};
+        }
 
         VkFormat colorFormat = c->vulkan.swapchain.image_format;
         VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
@@ -107,13 +114,19 @@ namespace NRE {
         gp.layout = pipelineLayout;
         gp.renderPass = VK_NULL_HANDLE;    // dynamic rendering
 
-        VkResult r = vkCreateGraphicsPipelines(c->vulkan.device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipeline);
+        if (VkResult r = vkCreateGraphicsPipelines(c->vulkan.device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipeline); r != VK_SUCCESS) {
+            pipeline = VK_NULL_HANDLE;
+            auto error = Error{ErrorCode::ErrorCreatingPipeline, "createPipeline(): vkCreateGraphicsPipelines failed: "
+                               + std::string(ErrorHandeling::vkResultName(r)) + ". Run a Debug build: the validation layer says why."};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+        }
         return {};
     }
     Pipeline::~Pipeline() {
         auto c = context();
         if (!c) {
-            ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"Renderer not initialized"});
+            ErrorHandeling::handleError(Error{ErrorCode::NotInitialized,"A Pipeline was destroyed after shutdown(): "
+                                                                        "the Vulkan device it belongs to is already gone."});
             std::abort();
         }
         if (pipeline) vkDestroyPipeline(c->vulkan.device, pipeline, nullptr);

@@ -1,5 +1,7 @@
 #include "image.h"
 
+#include <vulkan/vk_enum_string_helper.h>
+
 #include <string>
 
 #include "core/context.h"
@@ -16,7 +18,7 @@ namespace NRE {
 
     Result<void> Image::createImage(uint32_t width, uint32_t height, VkFormat format,VkImageUsageFlags usage, uint32_t mipLevels) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c,"Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
 
         this->format = format;
         this->mipLevels = mipLevels;
@@ -40,10 +42,11 @@ namespace NRE {
         allocationCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocationCreateInfo.flags = usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;
 
-        if (vmaCreateImage(c->vulkan.allocator,&vkImageCreateInfo,&allocationCreateInfo,&image,&allocation,nullptr) != VK_SUCCESS) {
+        if (VkResult r = vmaCreateImage(c->vulkan.allocator,&vkImageCreateInfo,&allocationCreateInfo,&image,&allocation,nullptr); r != VK_SUCCESS) {
             image = VK_NULL_HANDLE;
             allocation = nullptr;
-            auto error = Error{ErrorCode::ImageCreationFailed,"Failed to create " + std::to_string(width) + "x" + std::to_string(height) + " image."};
+            auto error = Error{ErrorCode::ImageCreationFailed, "Failed to create a " + std::to_string(width) + "x" + std::to_string(height)
+                               + " " + string_VkFormat(format) + " image: " + std::string(ErrorHandeling::vkResultName(r))};
             if (ErrorHandeling::handleError(error)) {
                 return std::unexpected(error);
             }
@@ -56,11 +59,12 @@ namespace NRE {
         imageViewCreateInfo.format = format;
         imageViewCreateInfo.subresourceRange = {aspectFor(format),0,mipLevels,0,1};
 
-        if (vkCreateImageView(c->vulkan.device,&imageViewCreateInfo,nullptr,&view) != VK_SUCCESS) {
+        if (VkResult r = vkCreateImageView(c->vulkan.device,&imageViewCreateInfo,nullptr,&view); r != VK_SUCCESS) {
             // Don't leave a half-made image behind.
             view = VK_NULL_HANDLE;
             (void)destroyImage();
-            auto error = Error{ErrorCode::ImageViewCreationFailed,"Failed to create image view."};
+            auto error = Error{ErrorCode::ImageViewCreationFailed, "Failed to create the view of a " + std::to_string(width) + "x"
+                               + std::to_string(height) + " " + string_VkFormat(format) + " image: " + std::string(ErrorHandeling::vkResultName(r))};
             if (ErrorHandeling::handleError(error)) {
                 return std::unexpected(error);
             }
@@ -72,7 +76,7 @@ namespace NRE {
 
     Result<void> Image::destroyImage() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c,"Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
 
         if (view)  vkDestroyImageView(c->vulkan.device, view, nullptr);
         if (image) vmaDestroyImage(c->vulkan.allocator, image, allocation);

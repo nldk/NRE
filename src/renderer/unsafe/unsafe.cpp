@@ -74,7 +74,7 @@ namespace NRE::Unsafe {
     }
     Result<void> registerFrameCallback(void (*frameCallback)(VkCommandBuffer commandBuffer)) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c,"Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         c->unsafeContext.frameCallback = frameCallback;
         return {};
     }

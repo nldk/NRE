@@ -19,9 +19,10 @@ namespace NRE {
     Result<void> setRenderConfig(RenderConfig config) {
         auto c = context();
         if (c) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::AlreadyInitialized,"Renderer already initialized"})) {
-                return std::unexpected(Error{ErrorCode::AlreadyInitialized,"Renderer already initialized"});
-            };
+            auto error = Error{ErrorCode::AlreadyInitialized,"setRenderConfig() was called twice. "
+                               "Call shutdown() before configuring the renderer again."};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};
         }
         globalContext = std::make_unique<Context>();
         globalContext->config = config;
@@ -61,11 +62,11 @@ namespace NRE {
         aci.usage = VMA_MEMORY_USAGE_AUTO;
         aci.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         DepthImage& d = c->vulkan.depth;
-        if (vmaCreateImage(c->vulkan.allocator, &ici, &aci, &d.image, &d.allocation, nullptr) != VK_SUCCESS) {
+        if (VkResult r = vmaCreateImage(c->vulkan.allocator, &ici, &aci, &d.image, &d.allocation, nullptr); r != VK_SUCCESS) {
             d = {};
-            if (ErrorHandeling::handleError(Error{ErrorCode::ErrorCreatingSwapchain,"Failed to create depth image."})) {
-                return std::unexpected(Error{ErrorCode::ErrorCreatingSwapchain,"Failed to create depth image."});
-            };
+            auto error = Error{ErrorCode::ImageCreationFailed, "Failed to create the " + std::to_string(e.width) + "x"
+                               + std::to_string(e.height) + " depth buffer: " + std::string(ErrorHandeling::vkResultName(r))};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
             return {};
         }
         VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -73,11 +74,11 @@ namespace NRE {
         vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format = depthFormat;
         vci.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-        if (vkCreateImageView(c->vulkan.device, &vci, nullptr, &d.view) != VK_SUCCESS) {
+        if (VkResult r = vkCreateImageView(c->vulkan.device, &vci, nullptr, &d.view); r != VK_SUCCESS) {
             destroyDepthImage(c);
-            if (ErrorHandeling::handleError(Error{ErrorCode::ErrorCreatingSwapchain,"Failed to create depth image view."})) {
-                return std::unexpected(Error{ErrorCode::ErrorCreatingSwapchain,"Failed to create depth image view."});
-            };
+            auto error = Error{ErrorCode::ImageViewCreationFailed, "Failed to create the depth buffer's image view: "
+                               + std::string(ErrorHandeling::vkResultName(r))};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
         }
         return {};
     }
@@ -138,7 +139,7 @@ namespace NRE {
     }
     Result<void> recreateSwapchain() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Cannot recreate swapchain: renderer not initialized.");
+        NRE_REQUIRE_CONTEXT(c);
 
         VkExtent2D extent = framebufferExtent(c);
         if (extent.width == 0 || extent.height == 0) return {};
@@ -148,7 +149,7 @@ namespace NRE {
         auto spawchain = vkb::SwapchainBuilder(c->vulkan.device).set_old_swapchain(c->vulkan.swapchain)
                              .set_desired_extent(extent.width, extent.height).build();
         if (!spawchain){
-            std::string msg = "Error recreating swapchain: " + spawchain.error().message();
+            std::string msg = "Failed to recreate the swapchain at " + std::to_string(extent.width) + "x" + std::to_string(extent.height) + ": " + spawchain.error().message();
             if (ErrorHandeling::handleError(Error{ErrorCode::ErrorRecreatingSwapchain,msg})) {
                 return std::unexpected(Error{ErrorCode::ErrorRecreatingSwapchain,msg});
             };
@@ -173,7 +174,7 @@ namespace NRE {
     }
     Result<void> init() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer config not created. create with setRenderConfig.");
+        NRE_REQUIRE_CONTEXT(c);
 
 #ifdef RENDERER_ENABLE_VALIDATION
         constexpr bool enableValidation = true;
@@ -186,7 +187,7 @@ namespace NRE {
         if (enableValidation) instanceBuilder.use_default_debug_messenger();   // prints the validation messages
         auto vulcanInstanceBuilder = instanceBuilder.build();
         if (!vulcanInstanceBuilder) {
-            std::string msg = "Error creating Vulkan instance: " + vulcanInstanceBuilder.error().message();
+            std::string msg = "init(): failed to create the Vulkan instance (Vulkan 1.3 required): " + vulcanInstanceBuilder.error().message();
             if (ErrorHandeling::handleError(Error{ErrorCode::ErrorCreatingVulkanInstance,msg})) {
                 return std::unexpected(Error{ErrorCode::ErrorCreatingVulkanInstance,msg});
             };
@@ -194,24 +195,25 @@ namespace NRE {
         }
         c->vulkan.instance = vulcanInstanceBuilder.value();
         if (!glfwInit()) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::WindowCreationFailed,"Error initializing GLFW."})) {
-                return std::unexpected(Error{ErrorCode::WindowCreationFailed,"Error initializing GLFW."});
-            };
+            auto error = Error{ErrorCode::WindowCreationFailed, "init(): glfwInit() failed. Is a display available "
+                               "(DISPLAY / WAYLAND_DISPLAY set)?"};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
             return {};
         }
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, c->config.windowConfig.resizable);
         c->window.window = glfwCreateWindow(c->config.windowConfig.width, c->config.windowConfig.height, c->config.windowConfig.title.c_str(), nullptr, nullptr);
         if (!c->window.window) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::WindowCreationFailed,"Error creating GLFW window."})) {
-                return std::unexpected(Error{ErrorCode::WindowCreationFailed,"Error creating GLFW window."});
-            };
+            auto error = Error{ErrorCode::WindowCreationFailed, "init(): failed to create the "
+                               + std::to_string(c->config.windowConfig.width) + "x" + std::to_string(c->config.windowConfig.height)
+                               + " window \"" + c->config.windowConfig.title + "\"."};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
             return {};
         }
-        if (glfwCreateWindowSurface(c->vulkan.instance,c->window.window,nullptr,&c->vulkan.surface) != VK_SUCCESS) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::WindowCreationFailed,"Error creating window surface."})) {
-                return std::unexpected(Error{ErrorCode::WindowCreationFailed,"Error creating window surface."});
-            };
+        if (VkResult r = glfwCreateWindowSurface(c->vulkan.instance,c->window.window,nullptr,&c->vulkan.surface); r != VK_SUCCESS) {
+            auto error = Error{ErrorCode::WindowCreationFailed, "init(): failed to create the Vulkan surface for the window: "
+                               + std::string(ErrorHandeling::vkResultName(r))};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
             return {};
         }
         glfwSetWindowCloseCallback(c->window.window,closeCallback);
@@ -249,7 +251,7 @@ namespace NRE {
                     }
                 }
             }
-            std::string msg = "Error selecting physical device: " + phys.error().message();
+            std::string msg = "init(): no GPU supports what the renderer needs (Vulkan 1.3, dynamic rendering, synchronization2, sampler anisotropy): " + phys.error().message();
             if (ErrorHandeling::handleError(Error{ErrorCode::UnsupportedGPU,msg})) {
                 return std::unexpected(Error{ErrorCode::UnsupportedGPU,msg});
             };
@@ -265,7 +267,7 @@ namespace NRE {
         VkExtent2D extent = framebufferExtent(c);
         auto spawchain = vkb::SwapchainBuilder(c->vulkan.device).set_desired_extent(extent.width, extent.height).build();
         if (!spawchain){
-            std::string msg = "Error creating swapchain: " + spawchain.error().message();
+            std::string msg = "init(): failed to create the " + std::to_string(extent.width) + "x" + std::to_string(extent.height) + " swapchain: " + spawchain.error().message();
             if (ErrorHandeling::handleError(Error{ErrorCode::ErrorCreatingSwapchain,msg})) {
                 return std::unexpected(Error{ErrorCode::ErrorCreatingSwapchain,msg});
             };
@@ -317,10 +319,11 @@ namespace NRE {
         aci.device           = c->vulkan.device.device;
         aci.vulkanApiVersion = VK_API_VERSION_1_3;
 
-        if (vmaCreateAllocator(&aci, &c->vulkan.allocator) != VK_SUCCESS) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::FailedToCreateAllocator,"Failed to create vma allocator."})) {
-                return std::unexpected(Error{ErrorCode::FailedToCreateAllocator,"Failed to create vma allocator."});
-            };
+        if (VkResult r = vmaCreateAllocator(&aci, &c->vulkan.allocator); r != VK_SUCCESS) {
+            auto error = Error{ErrorCode::FailedToCreateAllocator, "init(): failed to create the VMA memory allocator: "
+                               + std::string(ErrorHandeling::vkResultName(r))};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};   // everything after this needs the allocator
         }
         if (auto depth = createDepthImage(c); !depth) return depth;
 
@@ -360,7 +363,7 @@ namespace NRE {
 
     Result<void> shutdown() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         vkDeviceWaitIdle(c->vulkan.device);
         c->manager.destroyAll();
         auto  err = Texture::destroySampler();
@@ -396,12 +399,13 @@ namespace NRE {
 
     Result<void> renderFrame() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         Pipeline* pipeline = c->manager.get(c->vulkan.pipelineBound);
         if (!pipeline) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"})) {
-                return std::unexpected(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"});
-            };
+            auto error = Error{ErrorCode::NoPipelineBound, "renderFrame(): no pipeline is bound (or the bound one was destroyed), "
+                               "so nothing can be drawn. Create one with createPipeline() and bind it with bindPipeline()."};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};   // skip the frame: nothing has been acquired or recorded yet
         }
         Frame& f = c->vulkan.frames[c->vulkan.currentFrame % max_frames_in_flight];
         vkWaitForFences(c->vulkan.device, 1, &f.in_flight,VK_TRUE,UINT64_MAX);
@@ -449,7 +453,8 @@ namespace NRE {
         if (Scene* scene = c->manager.get(c->currentScene)) {
             (void)scene->draw(f.cmd);
         } else {
-            noScene = ErrorHandeling::handleError(Error{ErrorCode::NoSceneBound,"No scene was bound. Create one with createScene or bind one with bindScene."});
+            noScene = ErrorHandeling::handleError(Error{ErrorCode::NoSceneBound,"renderFrame(): no scene is bound, so the frame is empty. "
+                                                         "Create one with createScene() or bind one with bindScene()."});
         }
         #ifdef  NRE_UNSAFE_API
         if (c->unsafeContext.frameCallback) {
@@ -465,14 +470,15 @@ namespace NRE {
             presentFrame();
         }
         if (noScene) {
-            return std::unexpected(Error{ErrorCode::NoSceneBound,"No scene was bound. Create one with createScene or bind one with bindScene."});
+            return std::unexpected(Error{ErrorCode::NoSceneBound,"renderFrame(): no scene is bound, so the frame is empty. "
+                                         "Create one with createScene() or bind one with bindScene()."});
         }
         return {};
     }
 
     Result<void> submitFrame() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         Frame& f = c->vulkan.frames[c->vulkan.currentFrame % max_frames_in_flight];
         VkCommandBufferSubmitInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, nullptr, f.cmd};
         VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.image_acquired, 0,
@@ -489,7 +495,7 @@ namespace NRE {
 
     Result<void> presentFrame() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &c->vulkan.renderDone[c->vulkan.currentImageIndex];
         pi.swapchainCount = 1; pi.pSwapchains = &c->vulkan.swapchain.swapchain; pi.pImageIndices = &c->vulkan.currentImageIndex;
@@ -502,13 +508,13 @@ namespace NRE {
 
     Result<bool> windowShouldClose() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         return {c->window.shouldClose};
     }
 
     Result<void> pollEvents() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         c->window.scrollDelta = 0.0f;   // scrollCallback adds this frame's scrolling during glfwPollEvents
         glfwPollEvents();
         glm::dvec2 cursor;
@@ -519,37 +525,37 @@ namespace NRE {
     }
     Result<Handel<Shader>> createShader(std::string shaderPath,ShaderType type) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         return c->manager.create(Shader(shaderPath,type));
     }
 
     Result<void> destroyShader(Handel<Shader> shader) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         c->manager.destroy(shader);
         return {};
     }
 
     Result<Handel<Pipeline> > createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         return c->manager.create(Pipeline(vertexShader,fragmentShader,Vertex::layout()));
     }
     Result<void> destroyPipeline(Handel<Pipeline> pipeline) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         c->manager.destroy(pipeline);
         return {};
     }
 
     Result<void> bindPipeline(Handel<Pipeline> pipeline) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         auto pipeLine = c->manager.get(pipeline);
         if (!pipeLine) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"})) {
-                return std::unexpected(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to vertex shader out of date or non-existing"});
-            };
+            auto error = ErrorHandeling::badHandle("pipeline", pipeline, "createPipeline()", std::source_location::current());
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};   // keep the pipeline that was bound
         }
         c->vulkan.pipelineBound = pipeline;
         return {};
@@ -557,7 +563,7 @@ namespace NRE {
 
     Result<Handel<Model>> createModel(std::string modelPath) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         auto model = loadModel(modelPath);
         if (!model) {
             ErrorHandeling::handleError(model.error());
@@ -569,7 +575,7 @@ namespace NRE {
 
     Result<void> destroyModel(Handel<Model> model) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         // Instances keep the stale handle; Scene::draw skips them.
         if (Model* m = c->manager.get(model)) {
             // Frames in flight may still be reading the vertex/index buffers.
@@ -582,23 +588,24 @@ namespace NRE {
 
 
     namespace {
-        Result<Model*> getModel(Handel<Model> handle) {
+        Result<Model*> getModel(Handel<Model> handle, std::source_location location = std::source_location::current()) {
             auto c = context();
-            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+            NRE_REQUIRE_CONTEXT_AT(c, location);
             Model* model = c->manager.get(handle);
             if (!model) {
-                ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to model out of date or non-existing"});
-                return std::unexpected(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to model out of date or non-existing"});
+                auto error = ErrorHandeling::badHandle("model", handle, "createModel()", location);
+                ErrorHandeling::handleError(error);
+                return std::unexpected(error);
             }
             return model;
         }
 
-        Result<Instance*> getInstance(Handel<Instance> handle) {
+        Result<Instance*> getInstance(Handel<Instance> handle, std::source_location location = std::source_location::current()) {
             auto c = context();
-            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+            NRE_REQUIRE_CONTEXT_AT(c, location);
             Instance* instance = c->manager.get(handle);
             if (!instance) {
-                auto error = Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to instance out of date or non-existing"};
+                auto error = ErrorHandeling::badHandle("instance", handle, "createInstance()", location);
                 ErrorHandeling::handleError(error);
                 return std::unexpected(error);
             }
@@ -654,36 +661,39 @@ namespace NRE {
     }
 
     namespace {
-        Result<Scene*> getScene(Handel<Scene> handle) {
+        Result<Scene*> getScene(Handel<Scene> handle, std::source_location location = std::source_location::current()) {
             auto c = context();
-            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+            NRE_REQUIRE_CONTEXT_AT(c, location);
             Scene* scene = c->manager.get(handle);
             if (!scene) {
-                ErrorHandeling::handleError(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to scene out of date or non-existing"});
-                return std::unexpected(Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to scene out of date or non-existing"});
+                auto error = ErrorHandeling::badHandle("scene", handle, "createScene()", location);
+                ErrorHandeling::handleError(error);
+                return std::unexpected(error);
             }
             return scene;
         }
 
-        Result<Scene*> getBoundScenePtr() {
+        Result<Scene*> getBoundScenePtr(std::source_location location = std::source_location::current()) {
             auto c = context();
-            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+            NRE_REQUIRE_CONTEXT_AT(c, location);
             Scene* scene = c->manager.get(c->currentScene);
             if (!scene) {
-                ErrorHandeling::handleError(Error{ErrorCode::NoSceneBound,"No scene was bound. Create one with createScene or bind one with bindScene."});
-                return std::unexpected(Error{ErrorCode::NoSceneBound,"No scene was bound. Create one with createScene or bind one with bindScene."});
+                auto error = Error{ErrorCode::NoSceneBound, ErrorHandeling::functionName(location) + ": no scene is bound. "
+                                   "Create one with createScene() (the first one is bound automatically) or bind one with bindScene()."};
+                ErrorHandeling::handleError(error);
+                return std::unexpected(error);
             }
             return scene;
         }
 
-        Result<Camera*> getCamera() {
-            return getBoundScenePtr().transform([](Scene* scene) { return &scene->camera; });
+        Result<Camera*> getCamera(std::source_location location = std::source_location::current()) {
+            return getBoundScenePtr(location).transform([](Scene* scene) { return &scene->camera; });
         }
     }
 
     Result<Handel<Scene>> createScene() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         Scene scene{};
         auto err = scene.createUboAndLights();
         if (!err) return std::unexpected(err.error());
@@ -737,12 +747,12 @@ namespace NRE {
     }
 
     namespace {
-        Result<Light*> getLight(Handel<Light> handle) {
+        Result<Light*> getLight(Handel<Light> handle, std::source_location location = std::source_location::current()) {
             auto c = context();
-            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+            NRE_REQUIRE_CONTEXT_AT(c, location);
             Light* light = c->manager.get(handle);
             if (!light) {
-                auto error = Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to light out of date or non-existing"};
+                auto error = ErrorHandeling::badHandle("light", handle, "createDirectionalLight() or createPointLight()", location);
                 ErrorHandeling::handleError(error);
                 return std::unexpected(error);
             }
@@ -757,7 +767,7 @@ namespace NRE {
 
     Result<Handel<Light>> createDirectionalLight(glm::vec3 direction, glm::vec3 color, float intensity) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         Light light;
         light.directional = true;
         light.direction = lightDirection(direction);
@@ -768,7 +778,7 @@ namespace NRE {
 
     Result<Handel<Light>> createPointLight(glm::vec3 position, glm::vec3 color, float intensity) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         Light light;
         light.directional = false;
         light.position = position;
@@ -867,19 +877,19 @@ namespace NRE {
 
     Result<float> getFPS() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         return static_cast<float>(c->timer.fps);
     }
 
     Result<float> getDeltaTime() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         return static_cast<float>(c->timer.deltaTime);
     }
 
     Result<bool> isMouseButtonDown(MouseButton button) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         static_assert(int(MouseButton::Left) == GLFW_MOUSE_BUTTON_LEFT && int(MouseButton::Right) == GLFW_MOUSE_BUTTON_RIGHT
                       && int(MouseButton::Middle) == GLFW_MOUSE_BUTTON_MIDDLE);
         return glfwGetMouseButton(c->window.window, int(button)) == GLFW_PRESS;
@@ -887,23 +897,23 @@ namespace NRE {
 
     Result<glm::vec2> getMouseDelta() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         return c->window.cursorDelta;
     }
 
     Result<float> getScrollDelta() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         return c->window.scrollDelta;
     }
 
     namespace {
-        Result<Material*> getMaterial(Handel<Material> handle) {
+        Result<Material*> getMaterial(Handel<Material> handle, std::source_location location = std::source_location::current()) {
             auto c = context();
-            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+            NRE_REQUIRE_CONTEXT_AT(c, location);
             Material* material = c->manager.get(handle);
             if (!material) {
-                auto error = Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to material out of date or non-existing"};
+                auto error = ErrorHandeling::badHandle("material", handle, "createMaterial()", location);
                 ErrorHandeling::handleError(error);
                 return std::unexpected(error);
             }
@@ -913,7 +923,7 @@ namespace NRE {
 
     Result<Handel<Texture>> createTexture(std::string path) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         Texture texture;
         if (auto loaded = texture.loadTexture(path); !loaded) return std::unexpected(loaded.error());
         // With RenderErrorPolicy::Ignore a failed load returns success without an image; the empty handle
@@ -924,14 +934,14 @@ namespace NRE {
 
     Result<void> destroyTexture(Handel<Texture> texture) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         c->manager.destroy(texture);
         return {};
     }
 
     Result<void> destroyMaterial(Handel<Material> material) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         // The descriptor set stays allocated: the pool can't free single sets.
         c->manager.destroy(material);
         return {};
@@ -944,7 +954,7 @@ namespace NRE {
         Handel<Texture> base = texture == Handel<Texture>{} ? c->vulkan.defaultTexture : texture;
         Texture* t = c->manager.get(base);
         if (!t) {
-            auto error = Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to texture out of date or non-existing"};
+            auto error = ErrorHandeling::badHandle("texture", texture, "createTexture()", std::source_location::current());
             ErrorHandeling::handleError(error);
             return std::unexpected(error);
         }
@@ -974,8 +984,9 @@ namespace NRE {
         auto m = getModel(model);
         if (!m) return std::unexpected(m.error());
         if (index >= (*m)->materials.size()) {
-            auto error = Error{ErrorCode::IndexOutOfRange,"Material slot " + std::to_string(index) + " doesn't exist; the model has "
-                               + std::to_string((*m)->materials.size()) + "."};
+            auto error = Error{ErrorCode::IndexOutOfRange,"replaceModelMaterial(): material slot " + std::to_string(index)
+                               + " doesn't exist; the model has " + std::to_string((*m)->materials.size())
+                               + " (see getModelMaterials())."};
             ErrorHandeling::handleError(error);
             return std::unexpected(error);
         }

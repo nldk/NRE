@@ -22,12 +22,13 @@ namespace NRE {
     }
     Result<void> Scene::draw(VkCommandBuffer commandBuffer) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         auto pipeline = c->manager.get(c->vulkan.pipelineBound);
         if (!pipeline) {
-            if (ErrorHandeling::handleError(Error{ErrorCode::NoPipelineBound,"No pipeline was bound. Bind one with bindpipeline."})) {
-                return std::unexpected(Error{ErrorCode::NoPipelineBound,"No pipeline was bound. Bind one with bindpipeline."});
-            };
+            auto error = Error{ErrorCode::NoPipelineBound, "Scene::draw(): no pipeline is bound. "
+                               "Create one with createPipeline() and bind it with bindPipeline()."};
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};
         }
         uint32_t frame = c->vulkan.currentFrame % max_frames_in_flight;
         gpuLights.clear();
@@ -51,7 +52,7 @@ namespace NRE {
 
     Result<void> Scene::createUboAndLights() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
 
         for (VkDescriptorSet& set: frameSets) {
             auto s = c->vulkan.descriptorPool.allocateDescriptorSet(c->vulkan.descriptorLayouts[0]);

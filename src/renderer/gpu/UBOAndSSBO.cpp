@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string>
+#include <vulkan/vk_enum_string_helper.h>
 
 #include "descriptorSet.h"
 #include "core/context.h"
@@ -16,20 +17,24 @@ namespace NRE {
 
     Result<void> PerFrameBuffer::create(VkDescriptorType type, VkDeviceSize size) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         #ifndef NDEBUG
         if (!(type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER )) {
-            auto err = Error{ErrorCode::ImpossibleTypeForPerFrameBuffer,"The type given is not for creating a uniform buffer/storage buffer."};
+            auto err = Error{ErrorCode::ImpossibleTypeForPerFrameBuffer, std::string("PerFrameBuffer::create(): type is ")
+                             + string_VkDescriptorType(type) + "; it must be VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER or VK_DESCRIPTOR_TYPE_STORAGE_BUFFER."};
             ErrorHandeling::handleError(err);
             return std::unexpected(err);
         }
         if (size <= 0) {
-            auto err = Error{ErrorCode::BufferWithSizeNull,"Supplied size is less or equal than zero."};
+            auto err = Error{ErrorCode::BufferWithSizeNull, "PerFrameBuffer::create(): size is 0; a Vulkan buffer needs at least 1 byte."};
             ErrorHandeling::handleError(err);
             return std::unexpected(err);
         }
         if (type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && size > c->vulkan.physicalDevice.properties.limits.maxUniformBufferRange) {
-            auto err = Error{ErrorCode::SizeOfBufferToBig, "The supplied size for creating a UBO is bigger than the max size on the GPU."};
+            auto err = Error{ErrorCode::SizeOfBufferToBig, "PerFrameBuffer::create(): a " + std::to_string(size)
+                             + "-byte uniform buffer is bigger than this GPU allows (maxUniformBufferRange = "
+                             + std::to_string(c->vulkan.physicalDevice.properties.limits.maxUniformBufferRange)
+                             + " bytes). Use VK_DESCRIPTOR_TYPE_STORAGE_BUFFER for big data."};
             ErrorHandeling::handleError(err);
             return std::unexpected(err);
         }
@@ -50,10 +55,10 @@ namespace NRE {
 
     Result<void> PerFrameBuffer::attach(const VkDescriptorSet (&frameSets)[max_frames_in_flight], uint32_t binding) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
 #ifndef NDEBUG
         if (!created()) {
-            auto err = Error{ErrorCode::NotInitialized, "PerFrameBuffer::attach called before create."};
+            auto err = Error{ErrorCode::NotInitialized, "PerFrameBuffer::attach(): called before create(), so there are no buffers to attach."};
             ErrorHandeling::handleError(err);
             return std::unexpected(err);
         }
@@ -68,16 +73,16 @@ namespace NRE {
 
     Result<void> PerFrameBuffer::write(uint32_t frame, const void *data, VkDeviceSize size) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
 #ifndef NDEBUG
         if (frame >= max_frames_in_flight) {
-            auto err = Error{ErrorCode::IndexOutOfRange, "Frame " + std::to_string(frame) + " doesn't exist; there are "
+            auto err = Error{ErrorCode::IndexOutOfRange, "PerFrameBuffer::write(): frame " + std::to_string(frame) + " doesn't exist; there are "
                              + std::to_string(max_frames_in_flight) + " frames in flight."};
             ErrorHandeling::handleError(err);
             return std::unexpected(err);
         }
         if (buffers[frame].buffer == VK_NULL_HANDLE) {
-            auto err = Error{ErrorCode::NotInitialized, "PerFrameBuffer::write called before create."};
+            auto err = Error{ErrorCode::NotInitialized, "PerFrameBuffer::write(): called before create(), so there are no buffers to write to."};
             ErrorHandeling::handleError(err);
             return std::unexpected(err);
         }
@@ -87,8 +92,9 @@ namespace NRE {
             return std::unexpected(err);
         }
         if (type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && size > capacities[frame]) {
-            auto err = Error{ErrorCode::SizeOfBufferToBig, "Writing " + std::to_string(size) + " bytes into a "
-                             + std::to_string(capacities[frame]) + " byte uniform buffer."};
+            auto err = Error{ErrorCode::SizeOfBufferToBig, "PerFrameBuffer::write(): writing " + std::to_string(size)
+                             + " bytes into a " + std::to_string(capacities[frame]) + "-byte uniform buffer. "
+                             "Uniform buffers don't grow; create it with the full struct size."};
             ErrorHandeling::handleError(err);
             return std::unexpected(err);
         }

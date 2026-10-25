@@ -59,6 +59,8 @@ namespace NRE {
         ImpossibleTypeForPerFrameBuffer,
         BufferWithSizeNull,
         SizeOfBufferToBig,
+        DescriptorCreationFailed,
+        ShaderCreationFailed,
         UnknownError,
     };
     struct WindowConfig {
@@ -108,6 +110,8 @@ namespace NRE {
             case ErrorCode::ImpossibleTypeForPerFrameBuffer: return "ImpossibleTypeForPerFrameBuffer";
             case ErrorCode::BufferWithSizeNull: return "BufferWithSizeNull";
             case ErrorCode::SizeOfBufferToBig: return "SizeOfBufferToBig";
+            case ErrorCode::DescriptorCreationFailed: return "DescriptorCreationFailed";
+            case ErrorCode::ShaderCreationFailed: return "ShaderCreationFailed";
         }
         return "UnknownError. Not in enum.";
     }

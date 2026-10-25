@@ -116,7 +116,7 @@ namespace NRE {
             }
 
             auto c = context();
-            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+            NRE_REQUIRE_CONTEXT(c);
 
             Model model;
             // Same order as asset->materials, so a primitive's materialIndex indexes model.materials directly.
@@ -206,7 +206,7 @@ namespace NRE {
 
     Result<Model> loadModel(const std::string& path) {
         if (!std::filesystem::exists(path)) {
-            return std::unexpected(Error{ErrorCode::FileNotFound, "File " + path + " not found"});
+            return std::unexpected(Error{ErrorCode::FileNotFound, "Model file not found: '" + std::filesystem::absolute(path).string() + "'"});
         }
         std::string extension = std::filesystem::path(path).extension().string();
         std::ranges::transform(extension, extension.begin(), [](unsigned char ch) { return std::tolower(ch); });
@@ -214,12 +214,13 @@ namespace NRE {
         if (extension == ".gltf" || extension == ".glb") return loadGltf(path);
         if (extension == ".obj") return loadObj(path);
 
-        return std::unexpected(Error{ErrorCode::UnsupportedFormat, "Unsupported model format '" + extension + "' for " + path});
+        return std::unexpected(Error{ErrorCode::UnsupportedFormat, "Can't load '" + path + "': '" + extension
+                                     + "' models aren't supported. Use .gltf, .glb or .obj."});
     }
 
     Result<void> Model::uploadMeshes() {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized");
+        NRE_REQUIRE_CONTEXT(c);
 
         // Where each mesh's vertices and indices sit inside the shared staging buffer,
         // plus the new GPU buffers. These only move into the mesh once the copy succeeded.
@@ -245,7 +246,8 @@ namespace NRE {
 
         Buffer staging(stagingSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
         if (staging.buffer == VK_NULL_HANDLE) {
-            return std::unexpected(Error{ErrorCode::BufferCreationFailed,"Failed to create staging buffer for model upload."});
+            return std::unexpected(Error{ErrorCode::BufferCreationFailed,"Failed to create the " + std::to_string(stagingSize)
+                                         + "-byte staging buffer to upload the model's meshes."});
         }
 
         // On any early return, the Buffers in regions free themselves and the meshes keep their old buffers.
@@ -256,7 +258,9 @@ namespace NRE {
             r.vertexBuffer = Buffer(r.vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0);
             r.indexBuffer = Buffer(r.indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0);
             if (r.vertexBuffer.buffer == VK_NULL_HANDLE || r.indexBuffer.buffer == VK_NULL_HANDLE) {
-                return std::unexpected(Error{ErrorCode::BufferCreationFailed,"Failed to create mesh buffers for model upload."});
+                return std::unexpected(Error{ErrorCode::BufferCreationFailed,"Failed to create a mesh's GPU buffers ("
+                                             + std::to_string(r.vertexBytes) + " bytes of vertices, " + std::to_string(r.indexBytes)
+                                             + " bytes of indices)."});
             }
         }
 
@@ -298,7 +302,7 @@ namespace NRE {
     }
     Result<void> Model::draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
         PushConstants pc{modelMatrix,glm::inverseTranspose(modelMatrix)};
         vkCmdPushConstants(commandBuffer, pipeline.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
         0, sizeof(pc), &pc);

@@ -4,13 +4,13 @@
 #include "core/errorHandling.h"
 
 namespace NRE {
-    Result<void> Material::createDescriptorSet() {
+    Result<void> Material::createDescriptorSet(std::source_location location) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT_AT(c, location);
 
         Texture* base = c->manager.get(baseTexture);
         if (!base) {
-            auto error = Error{ErrorCode::HandelOutOfDateOrNonExistend, "Handel to material base texture out of date or non-existing"};
+            auto error = ErrorHandeling::badHandle("base texture", baseTexture, "createTexture()", location);
             if (ErrorHandeling::handleError(error)) {
                 return std::unexpected(error);
             }
@@ -27,7 +27,7 @@ namespace NRE {
     Result<Handel<Material>> createMaterial(Handel<Texture> baseTexture, Handel<Texture> metallicTexture,
                                             Handel<Texture> normalTexture) {
         auto c = context();
-        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        NRE_REQUIRE_CONTEXT(c);
 
         Material material;
         material.baseTexture = baseTexture == Handel<Texture>{} ? c->vulkan.defaultTexture : baseTexture;
