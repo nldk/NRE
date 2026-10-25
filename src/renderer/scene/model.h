@@ -46,7 +46,7 @@ namespace NRE {
 
         Model() = default;
 
-        Result<void> draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix, const glm::mat4& viewProj);
+        Result<void> draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix);
         [[nodiscard]] std::vector<Handel<Material>> getMaterials() const{ return materials; };
         Model(const Model&) = delete;
         Model& operator=(const Model&) = delete;

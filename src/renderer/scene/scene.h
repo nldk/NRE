@@ -4,6 +4,7 @@
 
 #include "gpu/buffer.h"
 #include "renderer.h"
+#include "gpu/UBOAndSSBO.h"
 
 namespace NRE {
 
@@ -41,12 +42,21 @@ namespace NRE {
     };
     class Scene {
         std::vector<Handel<Instance>> instances;
+        std::vector<Handel<Light>> lights;
+        std::vector<GpuLight> gpuLights;   // rebuilt from lights every frame; a member so it keeps its capacity
+        VkDescriptorSet frameSets[max_frames_in_flight]{};
+        PerFrameBuffer UBO;
+        PerFrameBuffer Lights;
     public:
         Camera camera;
-        // Does nothing if the instance is already in the scene.
         void addInstance(Handel<Instance> instance);
         void removeInstance(Handel<Instance> instance);
         const std::vector<Handel<Instance>>& getInstances() const { return instances; }
+        // Does nothing if the light is already in the scene.
+        void addLight(Handel<Light> light);
+        void removeLight(Handel<Light> light);
+        const std::vector<Handel<Light>>& getLights() const { return lights; }
         Result<void> draw(VkCommandBuffer commandBuffer);
+        Result<void> createUboAndLights();
     };
 }

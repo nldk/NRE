@@ -330,6 +330,16 @@ namespace NRE {
         err = Texture::createSampler();
         if (!err) return err;
 
+        // The order of descriptorLayouts is the set number: 0 = per frame (scene), 1 = material.
+        auto frameLayout = DescriptorSetLayout();
+        VkDescriptorSetLayoutBinding frameBindings[] = {
+            {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        };
+        err = frameLayout.createLayout(frameBindings);
+        if (!err) return err;
+        c->vulkan.descriptorLayouts.push_back(frameLayout);
+
         auto materialLayout = DescriptorSetLayout();
         err = materialLayout.createLayout(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT);
         if (!err) return err;
@@ -674,9 +684,12 @@ namespace NRE {
     Result<Handel<Scene>> createScene() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
-        Handel<Scene> scene = c->manager.create(Scene{});
-        if (!c->manager.get(c->currentScene)) c->currentScene = scene;
-        return scene;
+        Scene scene{};
+        auto err = scene.createUboAndLights();
+        if (!err) return std::unexpected(err.error());
+        Handel<Scene> sceneHandel = c->manager.create(std::move(scene));
+        if (!c->manager.get(c->currentScene)) c->currentScene = sceneHandel;
+        return sceneHandel;
     }
 
     Result<void> destroyScene(Handel<Scene> scene) {
@@ -685,6 +698,9 @@ namespace NRE {
         auto c = context();
         for (Handel<Instance> instance : (*s)->getInstances()) {
             if (Instance* i = c->manager.get(instance)) std::erase(i->scenes, scene);
+        }
+        for (Handel<Light> light : (*s)->getLights()) {
+            if (Light* l = c->manager.get(light)) std::erase(l->scenes, scene);
         }
         if (c->currentScene == scene) c->currentScene = {};
         c->manager.destroy(scene);
@@ -718,6 +734,94 @@ namespace NRE {
         (*s)->removeInstance(instance);
         std::erase((*i)->scenes, context()->currentScene);
         return {};
+    }
+
+    namespace {
+        Result<Light*> getLight(Handel<Light> handle) {
+            auto c = context();
+            NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+            Light* light = c->manager.get(handle);
+            if (!light) {
+                auto error = Error{ErrorCode::HandelOutOfDateOrNonExistend,"Handel to light out of date or non-existing"};
+                ErrorHandeling::handleError(error);
+                return std::unexpected(error);
+            }
+            return light;
+        }
+
+        // The shader assumes a unit direction; a zero vector has none, so it falls back to straight down.
+        glm::vec3 lightDirection(glm::vec3 direction) {
+            return glm::length(direction) > 0.0f ? glm::normalize(direction) : glm::vec3(0.0f, -1.0f, 0.0f);
+        }
+    }
+
+    Result<Handel<Light>> createDirectionalLight(glm::vec3 direction, glm::vec3 color, float intensity) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        Light light;
+        light.directional = true;
+        light.direction = lightDirection(direction);
+        light.color = color;
+        light.intensity = intensity;
+        return c->manager.create(std::move(light));
+    }
+
+    Result<Handel<Light>> createPointLight(glm::vec3 position, glm::vec3 color, float intensity) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        Light light;
+        light.directional = false;
+        light.position = position;
+        light.color = color;
+        light.intensity = intensity;
+        return c->manager.create(std::move(light));
+    }
+
+    Result<void> destroyLight(Handel<Light> light) {
+        auto l = getLight(light);
+        if (!l) return std::unexpected(l.error());
+        auto c = context();
+        for (Handel<Scene> scene : (*l)->scenes) {
+            if (Scene* s = c->manager.get(scene)) s->removeLight(light);
+        }
+        c->manager.destroy(light);
+        return {};
+    }
+
+    Result<void> addLightToScene(Handel<Light> light) {
+        auto s = getBoundScenePtr();
+        if (!s) return std::unexpected(s.error());
+        auto l = getLight(light);
+        if (!l) return std::unexpected(l.error());
+        Handel<Scene> scene = context()->currentScene;
+        (*s)->addLight(light);
+        if (std::ranges::find((*l)->scenes, scene) == (*l)->scenes.end()) (*l)->scenes.push_back(scene);
+        return {};
+    }
+
+    Result<void> removeLightFromScene(Handel<Light> light) {
+        auto s = getBoundScenePtr();
+        if (!s) return std::unexpected(s.error());
+        auto l = getLight(light);
+        if (!l) return std::unexpected(l.error());
+        (*s)->removeLight(light);
+        std::erase((*l)->scenes, context()->currentScene);
+        return {};
+    }
+
+    Result<void> setLightPosition(Handel<Light> light, glm::vec3 position) {
+        return getLight(light).transform([&](Light* l) { l->position = position; });
+    }
+
+    Result<void> setLightDirection(Handel<Light> light, glm::vec3 direction) {
+        return getLight(light).transform([&](Light* l) { l->direction = lightDirection(direction); });
+    }
+
+    Result<void> setLightColor(Handel<Light> light, glm::vec3 color, float intensity) {
+        return getLight(light).transform([&](Light* l) {
+            l->color = color;
+            l->intensity = intensity;
+        });
     }
 
     Result<void> setCameraPosition(glm::vec3 position) {

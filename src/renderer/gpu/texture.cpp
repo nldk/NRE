@@ -95,7 +95,7 @@ namespace NRE {
     Result<VkDescriptorSet> Texture::createDescriptorSet() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c,"Renderer not initialized. Initialize with init.");
-        auto set = c->vulkan.descriptorPool.allocateDescriptorSet(c->vulkan.descriptorLayouts[0]);
+        auto set = c->vulkan.descriptorPool.allocateDescriptorSet(c->vulkan.descriptorLayouts[1]);   // the material layout
         if (!set) return set;
         auto err = writeImageDescriptor(*set,0,image.getView(),c->vulkan.sampler);
         if (!err) return std::unexpected(err.error());

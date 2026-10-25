@@ -93,7 +93,7 @@ namespace NRE {
             return std::unexpected(err);
         }
 #endif
-        if (size == 0) return {};   // e.g. no lights this frame
+        if (size == 0) return {};
         if (size > capacities[frame]) {
             if (auto r = grow(frame, size); !r) return r;
             if (size > capacities[frame]) return {};

@@ -3,33 +3,42 @@
 #include "core/context.h"
 
 namespace NRE {
-    Result<void> DescriptorSetLayout::createLayout(uint32_t binding, VkDescriptorType descriptorType, uint32_t descriptorCount, VkShaderStageFlags stageFlags) {
+    Result<void> DescriptorSetLayout::createLayout(std::span<const VkDescriptorSetLayoutBinding> bindings) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
 
+        VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        ci.bindingCount = static_cast<uint32_t>(bindings.size());
+        ci.pBindings    = bindings.data();
+        vkCreateDescriptorSetLayout(c->vulkan.device, &ci, nullptr, &descriptorSetLayout);
+        return {};
+    }
+
+    Result<void> DescriptorSetLayout::createLayout(uint32_t binding, VkDescriptorType descriptorType, uint32_t descriptorCount, VkShaderStageFlags stageFlags) {
         VkDescriptorSetLayoutBinding b{};
         b.binding         = binding;
         b.descriptorType  = descriptorType;
         b.descriptorCount = descriptorCount;
         b.stageFlags      = stageFlags;
-
-        VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 1;
-        ci.pBindings    = &b;
-        vkCreateDescriptorSetLayout(c->vulkan.device, &ci, nullptr, &descriptorSetLayout);
-        return {};
+        return createLayout(std::span(&b, 1));
     }
 
     Result<void> DescriptorSetPool::initDescriptorSetPool() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
+        // Each scene allocates max_frames_in_flight frame sets (1 UBO + 1 SSBO each), and sets can't be freed
+        // one by one, so this is also how many scenes can ever be created.
+        constexpr uint32_t maxScenes = 8;
+        constexpr uint32_t frameSets = max_frames_in_flight * maxScenes;
+        constexpr uint32_t materialSets = 64;
         VkDescriptorPoolSize sizes[] = {
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         max_frames_in_flight},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         frameSets},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         frameSets},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialSets},
         };
         VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        pci.maxSets       = max_frames_in_flight + 64;
-        pci.poolSizeCount = 2;
+        pci.maxSets       = frameSets + materialSets;
+        pci.poolSizeCount = 3;
         pci.pPoolSizes    = sizes;
         vkCreateDescriptorPool(c->vulkan.device, &pci, nullptr, &descriptorSetPool);
         return {};

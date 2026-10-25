@@ -1,4 +1,5 @@
 #pragma once
+#include <span>
 #include <vulkan/vulkan_core.h>
 
 #include "renderer.h"
@@ -8,6 +9,8 @@ namespace NRE {
     class DescriptorSetLayout {
         VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
     public:
+        Result<void> createLayout(std::span<const VkDescriptorSetLayoutBinding> bindings);
+        // Shorthand for a layout with a single binding.
         Result<void> createLayout(uint32_t binding, VkDescriptorType descriptorType, uint32_t descriptorCount, VkShaderStageFlags stageFlags);
         VkDescriptorSetLayout getDescriptorSetLayout() const {
             return descriptorSetLayout;

@@ -296,10 +296,10 @@ namespace NRE {
             (void)mesh.indexBuffer.destroyBuffer();
         }
     }
-    Result<void> Model::draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix, const glm::mat4& viewProj) {
+    Result<void> Model::draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c, "Renderer not initialized. Initialize with init.");
-        PushConstants pc{modelMatrix, viewProj};
+        PushConstants pc{modelMatrix,glm::inverseTranspose(modelMatrix)};
         vkCmdPushConstants(commandBuffer, pipeline.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
         0, sizeof(pc), &pc);
         uint32_t materialCount = materials.size();
@@ -308,7 +308,7 @@ namespace NRE {
 
             Material* material = mesh.material < materialCount ? c->manager.get(materials[mesh.material]) : nullptr;
             if (!material) material =  c->manager.get(c->vulkan.defaultMaterial);
-            vkCmdBindDescriptorSets(commandBuffer,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline.pipelineLayout,0,1,&material->descriptorSet,0,nullptr);
+            vkCmdBindDescriptorSets(commandBuffer,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline.pipelineLayout,1,1,&material->descriptorSet,0,nullptr);   // set 1
 
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);

@@ -145,6 +145,7 @@ namespace NRE {
     class Pipeline;
     struct Model;
     struct Instance;
+    struct Light;
     class Scene;
     class Texture;
     struct Material;
@@ -207,6 +208,22 @@ namespace NRE {
     RENDERER_API Result<void> setModelMaterial(Handel<Model> model, Handel<Material> material);
     // Replaces slot index (an index into getModelMaterials), so only the meshes using that slot change.
     RENDERER_API Result<void> replaceModelMaterial(Handel<Model> model, uint32_t index, Handel<Material> material);
+
+    // Lights. Like instances: create one, then add it to the bound scene. Intensity is in arbitrary units:
+    // a directional light around 3 looks like plain diffuse lighting, a point light falls off with 1/distance².
+    // direction is the way the light travels (e.g. {0, -1, 0} shines straight down).
+    RENDERER_API Result<Handel<Light>> createDirectionalLight(glm::vec3 direction, glm::vec3 color = glm::vec3(1.0f), float intensity = 3.0f);
+    RENDERER_API Result<Handel<Light>> createPointLight(glm::vec3 position, glm::vec3 color = glm::vec3(1.0f), float intensity = 10.0f);
+    // Also removes it from every scene it's in.
+    RENDERER_API Result<void> destroyLight(Handel<Light> light);
+    // Add to / remove from the bound scene. Adding a light that's already in it does nothing.
+    RENDERER_API Result<void> addLightToScene(Handel<Light> light);
+    RENDERER_API Result<void> removeLightFromScene(Handel<Light> light);
+    // Only used by point lights.
+    RENDERER_API Result<void> setLightPosition(Handel<Light> light, glm::vec3 position);
+    // Only used by directional lights.
+    RENDERER_API Result<void> setLightDirection(Handel<Light> light, glm::vec3 direction);
+    RENDERER_API Result<void> setLightColor(Handel<Light> light, glm::vec3 color, float intensity);
 
     // Angles are in radians.
     RENDERER_API Result<void> setCameraPosition(glm::vec3 position);

@@ -12,7 +12,7 @@ namespace NRE {
     };
     struct PushConstants {
         glm::mat4 model;      // offset 0
-        glm::mat4 viewProj;   // offset 64
+        glm::mat4 inversModelMatrix;   // offset 64
     };
     static_assert(sizeof(PushConstants) <= 128, "exceeds guaranteed push constant size");
     struct Pipeline {
