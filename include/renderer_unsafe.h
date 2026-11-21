@@ -27,7 +27,25 @@ namespace NRE::Unsafe {
     RENDERER_API VkQueue getGraphicsQueue();
     RENDERER_API uint32_t getGraphicsQueueFamily();
     RENDERER_API VmaAllocator_T* getAllocator();
+    // Called every frame inside a render pass on the window, after the scene: bind your own pipeline and state.
+    // With a render target set, the window pass only contains what the callback draws. Pass nullptr to remove it.
     RENDERER_API Result<void> registerFrameCallback(void (*frameCallback)(VkCommandBuffer commandBuffer));
+
+    // Render to a texture: the scene is drawn into a width x height image instead of the window, and the
+    // projection uses that size. The window is then cleared and only shows what the frame callback draws,
+    // e.g. the texture in an ImGui panel. When the callback runs, the texture is in
+    // VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
+    // Calling it with the current size does nothing, so it can be called every frame with a panel's size.
+    // A new size replaces the image (after waiting for the GPU): get the new view and re-register it with ImGui.
+    RENDERER_API Result<void> setRenderTarget(uint32_t width, uint32_t height);
+    // Back to drawing the scene straight to the window. Frees the texture.
+    RENDERER_API Result<void> clearRenderTarget();
+    // VK_NULL_HANDLE / {0, 0} while there's no render target. The format is the swapchain's, which the pipelines use.
+    // The image also has TRANSFER_SRC usage, so it can be copied out (e.g. for a screenshot).
+    RENDERER_API VkImage getRenderTargetImage();
+    RENDERER_API VkImageView getRenderTargetView();
+    RENDERER_API VkExtent2D getRenderTargetExtent();
+    RENDERER_API VkFormat getRenderTargetFormat();
 
     // The sampler every texture uses.
     RENDERER_API VkSampler getSampler();

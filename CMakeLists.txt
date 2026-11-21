@@ -199,8 +199,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # ---------------------------------------------------------------------------
-# Demo app: skipped automatically when another project fetches NRE.
+# Demo app and benchmark: skipped automatically when another project fetches NRE.
 # ---------------------------------------------------------------------------
 if(PROJECT_IS_TOP_LEVEL)
     add_subdirectory(example)
+    add_subdirectory(benchmark)
 endif()

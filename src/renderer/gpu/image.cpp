@@ -75,6 +75,9 @@ namespace NRE {
     }
 
     Result<void> Image::destroyImage() {
+        // Nothing to free: return before needing the context, which may already be gone (Images inside the Context
+        // itself are destructed while it's being torn down).
+        if (image == VK_NULL_HANDLE && view == VK_NULL_HANDLE) return {};
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
 

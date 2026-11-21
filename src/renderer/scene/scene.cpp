@@ -20,12 +20,12 @@ namespace NRE {
     void Scene::removeLight(Handel<Light> light) {
         std::erase(lights, light);
     }
-    Result<void> Scene::draw(VkCommandBuffer commandBuffer) {
+    Result<void> Scene::bindFrameData(VkCommandBuffer commandBuffer) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         auto pipeline = c->manager.get(c->vulkan.pipelineBound);
         if (!pipeline) {
-            auto error = Error{ErrorCode::NoPipelineBound, "Scene::draw(): no pipeline is bound. "
+            auto error = Error{ErrorCode::NoPipelineBound, "Scene::bindFrameData(): no pipeline is bound. "
                                "Create one with createPipeline() and bind it with bindPipeline()."};
             if (ErrorHandeling::handleError(error)) return std::unexpected(error);
             return {};
@@ -40,6 +40,14 @@ namespace NRE {
         if (auto r = Lights.write(frame, gpuLights.data(), gpuLights.size() * sizeof(GpuLight)); !r) return r;
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipelineLayout,0,1,&frameSets[frame],0,nullptr);
+        return {};
+    }
+
+    Result<void> Scene::draw(VkCommandBuffer commandBuffer) {
+        if (auto r = bindFrameData(commandBuffer); !r) return r;
+        auto c = context();
+        Pipeline* pipeline = c->manager.get(c->vulkan.pipelineBound);
+        if (!pipeline) return {};   // bindFrameData already reported it (RenderErrorPolicy::Ignore)
         for (Handel<Instance> instanceHandel : instances) {
             Instance* instance = c->manager.get(instanceHandel);
             if (!instance || !instance->visible) continue;

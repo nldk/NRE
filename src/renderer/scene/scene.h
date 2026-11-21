@@ -56,6 +56,9 @@ namespace NRE {
         void addLight(Handel<Light> light);
         void removeLight(Handel<Light> light);
         const std::vector<Handel<Light>>& getLights() const { return lights; }
+        // Writes this frame's camera + lights and binds the bound pipeline and set 0. Draws nothing.
+        Result<void> bindFrameData(VkCommandBuffer commandBuffer);
+        // bindFrameData, then every visible instance.
         Result<void> draw(VkCommandBuffer commandBuffer);
         Result<void> createUboAndLights();
     };

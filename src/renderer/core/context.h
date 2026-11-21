@@ -7,6 +7,7 @@
 #include "core/resourceManagement.h"
 #include "renderer.h"
 #include "core/frames.h"
+#include "gpu/image.h"
 namespace NRE {
     struct Frame {
         VkCommandPool pool;
@@ -49,6 +50,11 @@ namespace NRE {
         std::vector<DescriptorSetLayout> descriptorLayouts;
         Handel<Texture> defaultTexture;
         Handel<Material> defaultMaterial;
+        // FunctionDrawMode: true between renderFrame() and endFrame().
+        bool isDrawing = false;
+        // FunctionDrawMode: false when renderFrame() skipped the frame (swapchain out of date, no pipeline under
+        // RenderErrorPolicy::Ignore), so the command buffer isn't recording and draw calls do nothing.
+        bool frameRecording = false;
     };
     struct Window {
         GLFWwindow* window = nullptr;
@@ -70,6 +76,10 @@ namespace NRE {
 #ifdef NRE_UNSAFE_API
     struct UnsafeContext {
           void (*frameCallback)(VkCommandBuffer) = nullptr;
+          // Render target (Unsafe::setRenderTarget): while targetColor has an image, the scene is drawn into
+          // these instead of the window. Destroyed in shutdown(), before the allocator.
+          Image targetColor;
+          Image targetDepth;
     };
 #endif
     struct Context {
@@ -84,4 +94,7 @@ namespace NRE {
         #endif
     };
     Context* context();
+    // Rebuilds c->vulkan.projection for the size the scene is drawn at (the render target's, if there is one).
+    // Defined in core/renderer.cpp.
+    void updateProjection(Context* c);
 }

@@ -33,6 +33,10 @@ namespace NRE {
         Return,
         Panic,
     };
+    enum class ApiMode {
+        SceneMode,
+        FunctionDrawMode,
+    };
     enum class ErrorCode {
         UnsupportedGPU,
         ErrorCreatingVulkanInstance,
@@ -71,6 +75,7 @@ namespace NRE {
     };
     struct RenderConfig {
         RenderMode mode;
+        ApiMode apiMode;
         RenderErrorPolicy errorPolicy;
         bool manualFramePresentationAndSubmission;
         WindowConfig windowConfig;
@@ -157,7 +162,13 @@ namespace NRE {
     RENDERER_API Result<void> setRenderConfig(RenderConfig config);
     RENDERER_API Result<void> init();
     RENDERER_API Result<void> shutdown();
+    // SceneMode: draws the bound scene and (unless manualFramePresentationAndSubmission) submits and presents it.
+    // FunctionDrawMode: starts the frame, raylib style: renderFrame(), then drawModel()/drawInstance() calls, then endFrame().
+    // The camera and lights come from the bound scene (its instances aren't drawn), and so does the pipeline bound now.
     RENDERER_API Result<void> renderFrame();
+    // FunctionDrawMode only: ends the frame renderFrame() started and (unless manualFramePresentationAndSubmission)
+    // submits and presents it.
+    RENDERER_API Result<void> endFrame();
     RENDERER_API Result<void> presentFrame();
     RENDERER_API Result<void> submitFrame();
     RENDERER_API Result<bool> windowShouldClose();
@@ -184,6 +195,11 @@ namespace NRE {
     RENDERER_API Result<void> scaleInstance(Handel<Instance> instance, glm::vec3 factor);
     // A hidden instance stays in its scenes but isn't drawn.
     RENDERER_API Result<void> setVisibility(Handel<Instance> instance, bool visible);
+    // FunctionDrawMode only, between renderFrame() and endFrame(). Draws the model once with this transform,
+    // no instance needed. Do nothing while renderFrame() skipped the frame (e.g. the window is being resized).
+    RENDERER_API Result<void> drawModel(Handel<Model> model, const Transform& transform = {});
+    // Uses the instance's transform. A hidden instance isn't drawn.
+    RENDERER_API Result<void> drawInstance(Handel<Instance> instance);
     RENDERER_API Result<Handel<Scene>> createScene();
     RENDERER_API Result<void> destroyScene(Handel<Scene> scene);
     RENDERER_API Result<void> bindScene(Handel<Scene> scene);

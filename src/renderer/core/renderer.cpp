@@ -123,8 +123,44 @@ namespace NRE {
         return {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
     }
 
+    // Starts dynamic rendering into colorView + depthView (both cleared) and sets a viewport/scissor covering extent.
+    void beginRendering(VkCommandBuffer cmd, VkImageView colorView, VkImageView depthView, VkExtent2D extent, VkClearColorValue clearColor) {
+        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        color.imageView = colorView;
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.clearValue.color = clearColor;
+        VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        depth.imageView = depthView;
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth.clearValue.depthStencil = {1.0f, 0};
+        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        ri.renderArea = {{0, 0}, extent};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &color;
+        ri.pDepthAttachment = &depth;
+        vkCmdBeginRendering(cmd, &ri);
+
+        VkViewport viewport{0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f};
+        VkRect2D scissor{{0, 0}, extent};
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+    }
+
+    // The size the scene is drawn at: the unsafe render target's if one is set, otherwise the window's.
+    VkExtent2D sceneExtent(Context* c) {
+#ifdef NRE_UNSAFE_API
+        if (c->unsafeContext.targetColor.getImage() != VK_NULL_HANDLE) return c->unsafeContext.targetColor.getExtent();
+#endif
+        return c->vulkan.swapchain.extent;
+    }
+
     void updateProjection(Context* c) {
-        VkExtent2D e = c->vulkan.swapchain.extent;
+        VkExtent2D e = sceneExtent(c);
         if (e.width == 0 || e.height == 0) return;
         float width = static_cast<float>(e.width);
         float height = static_cast<float>(e.height);
@@ -358,6 +394,11 @@ namespace NRE {
         if (!err) return err;
         c->vulkan.defaultMaterial = c->manager.create(std::move(defaultMaterial));
 
+        // FunctionDrawMode draws with the bound scene's camera and lights, so give it one: the camera
+        // and light functions then work without calling createScene().
+        if (c->config.apiMode == ApiMode::FunctionDrawMode) {
+            if (auto scene = createScene(); !scene) return std::unexpected(scene.error());
+        }
         return {};
     }
 
@@ -376,6 +417,10 @@ namespace NRE {
             if (!err) return err;
         }
         destroyDepthImage(c);
+#ifdef NRE_UNSAFE_API
+        (void)c->unsafeContext.targetColor.destroyImage();
+        (void)c->unsafeContext.targetDepth.destroyImage();
+#endif
         vmaDestroyAllocator(c->vulkan.allocator);
         for (Frame& f : c->vulkan.frames) {
             vkDestroyCommandPool(c->vulkan.device, f.pool, nullptr);  // frees f.cmd along with it
@@ -397,9 +442,114 @@ namespace NRE {
         return {};
     }
 
+    namespace {
+        // Acquires a swapchain image and starts recording the frame: begins rendering into the scene's color + depth
+        // (the window, or the unsafe render target) and binds the pipeline. Returns false when the frame was skipped,
+        // and then nothing is recording.
+        Result<bool> beginFrame(Context* c, Pipeline* pipeline) {
+            Frame& f = c->vulkan.frames[c->vulkan.currentFrame % max_frames_in_flight];
+            vkWaitForFences(c->vulkan.device, 1, &f.in_flight,VK_TRUE,UINT64_MAX);
+            VkResult r = vkAcquireNextImageKHR(c->vulkan.device,c->vulkan.swapchain,UINT64_MAX,f.image_acquired,VK_NULL_HANDLE,&c->vulkan.currentImageIndex);
+            if (r == VK_ERROR_OUT_OF_DATE_KHR) {
+                if (auto rec = recreateSwapchain(); !rec) return std::unexpected(rec.error());
+                return false;
+            }
+            vkResetFences(c->vulkan.device, 1, &f.in_flight);
+
+            vkResetCommandBuffer(f.cmd, 0);
+            VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(f.cmd,&bi);
+
+            // Where the scene goes: the window, or (unsafe API) the render target, which the frame callback then
+            // shows on the window.
+            VkImage sceneColor = c->vulkan.images[c->vulkan.currentImageIndex], sceneDepth = c->vulkan.depth.image;
+            VkImageView sceneColorView = c->vulkan.views[c->vulkan.currentImageIndex], sceneDepthView = c->vulkan.depth.view;
+#ifdef NRE_UNSAFE_API
+            UnsafeContext& u = c->unsafeContext;
+            if (u.targetColor.getImage() != VK_NULL_HANDLE) {
+                sceneColor = u.targetColor.getImage();
+                sceneDepth = u.targetDepth.getImage();
+                sceneColorView = u.targetColor.getView();
+                sceneDepthView = u.targetDepth.getView();
+            }
+#endif
+            // Last frame's contents aren't needed (both are cleared below), so UNDEFINED lets the driver discard them.
+            transition(f.cmd,sceneColor,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            transition(f.cmd,sceneDepth,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_ASPECT_DEPTH_BIT);
+            beginRendering(f.cmd, sceneColorView, sceneDepthView, sceneExtent(c), {{0.1f, 0.3f, 0.6f, 1.0f}});
+            vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline->pipeline);
+            return true;
+        }
+
+        // Ends what beginFrame started: runs the unsafe frame callback, ends rendering, and submits + presents
+        // unless manualFramePresentationAndSubmission is set.
+        void finishFrame(Context* c) {
+            Frame& f = c->vulkan.frames[c->vulkan.currentFrame % max_frames_in_flight];
+            VkImage windowImage = c->vulkan.images[c->vulkan.currentImageIndex];
+#ifdef NRE_UNSAFE_API
+            UnsafeContext& u = c->unsafeContext;
+            if (u.targetColor.getImage() != VK_NULL_HANDLE) {
+                // Second pass, on the window: the target is now a texture the frame callback can sample (e.g. ImGui::Image).
+                vkCmdEndRendering(f.cmd);
+                transition(f.cmd,u.targetColor.getImage(),VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                transition(f.cmd,windowImage,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                transition(f.cmd,c->vulkan.depth.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_ASPECT_DEPTH_BIT);
+                beginRendering(f.cmd, c->vulkan.views[c->vulkan.currentImageIndex], c->vulkan.depth.view,
+                               c->vulkan.swapchain.extent, {{0.05f, 0.05f, 0.05f, 1.0f}});
+            }
+            if (u.frameCallback) {
+                u.frameCallback(f.cmd);
+            }
+#endif
+            vkCmdEndRendering(f.cmd);
+            transition(f.cmd,windowImage,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            vkEndCommandBuffer(f.cmd);
+            if (!c->config.manualFramePresentationAndSubmission) {
+                submitFrame();
+                presentFrame();
+            }
+        }
+
+        // FunctionDrawMode checks shared by the draw functions. Returns false when the call should do nothing.
+        Result<bool> canDraw(Context* c, std::source_location location) {
+#ifndef NDEBUG
+            if (c->config.apiMode != ApiMode::FunctionDrawMode) {
+                auto error = Error{ErrorCode::WrongMode, ErrorHandeling::functionName(location) + ": draw functions only work in "
+                                   "ApiMode::FunctionDrawMode. In SceneMode, add instances to a scene instead."};
+                ErrorHandeling::handleError(error);
+                return std::unexpected(error);
+            }
+            if (!c->vulkan.isDrawing) {
+                auto error = Error{ErrorCode::WrongMode, ErrorHandeling::functionName(location) + ": called outside a frame. "
+                                   "Call renderFrame() first and endFrame() after the last draw."};
+                ErrorHandeling::handleError(error);
+                return std::unexpected(error);
+            }
+#else
+            (void)location;
+#endif
+            return c->vulkan.frameRecording;
+        }
+    }
+
     Result<void> renderFrame() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
+        const bool functionMode = c->config.apiMode == ApiMode::FunctionDrawMode;
+#ifndef NDEBUG
+        if (functionMode && c->vulkan.isDrawing) {
+            auto error = Error{ErrorCode::WrongMode, "renderFrame(): the previous frame wasn't ended. "
+                               "In ApiMode::FunctionDrawMode, call endFrame() after the frame's draw calls."};
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);
+        }
+#endif
+        // In FunctionDrawMode the frame is open until endFrame(), even if it's skipped below:
+        // the draw calls then do nothing, and endFrame() just closes it.
+        c->vulkan.isDrawing = functionMode;
+        c->vulkan.frameRecording = false;
+
         Pipeline* pipeline = c->manager.get(c->vulkan.pipelineBound);
         if (!pipeline) {
             auto error = Error{ErrorCode::NoPipelineBound, "renderFrame(): no pipeline is bound (or the bound one was destroyed), "
@@ -407,73 +557,97 @@ namespace NRE {
             if (ErrorHandeling::handleError(error)) return std::unexpected(error);
             return {};   // skip the frame: nothing has been acquired or recorded yet
         }
+        Scene* scene = c->manager.get(c->currentScene);
+        if (!scene) {
+            // Checked before acquiring: in FunctionDrawMode the camera and lights come from the scene, so there's nothing
+            // to draw with. SceneMode still clears the window, as it did before.
+            auto error = Error{ErrorCode::NoSceneBound, "renderFrame(): no scene is bound, so the frame is empty. "
+                               "Create one with createScene() or bind one with bindScene()."};
+            bool report = ErrorHandeling::handleError(error);
+            if (functionMode) {
+                if (report) return std::unexpected(error);
+                return {};
+            }
+            auto begun = beginFrame(c, pipeline);
+            if (!begun) return std::unexpected(begun.error());
+            if (*begun) finishFrame(c);
+            if (report) return std::unexpected(error);
+            return {};
+        }
+
+        auto begun = beginFrame(c, pipeline);
+        if (!begun) return std::unexpected(begun.error());
+        if (!*begun) return {};
         Frame& f = c->vulkan.frames[c->vulkan.currentFrame % max_frames_in_flight];
-        vkWaitForFences(c->vulkan.device, 1, &f.in_flight,VK_TRUE,UINT64_MAX);
-        VkResult r = vkAcquireNextImageKHR(c->vulkan.device,c->vulkan.swapchain,UINT64_MAX,f.image_acquired,VK_NULL_HANDLE,&c->vulkan.currentImageIndex);
-        if (r == VK_ERROR_OUT_OF_DATE_KHR) { recreateSwapchain();return {};}
-        vkResetFences(c->vulkan.device, 1, &f.in_flight);
-
-        vkResetCommandBuffer(f.cmd, 0);
-        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(f.cmd,&bi);
-        transition(f.cmd,c->vulkan.images[c->vulkan.currentImageIndex],VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        // Last frame's depth values aren't needed (it's cleared below), so UNDEFINED lets the driver discard them.
-        transition(f.cmd,c->vulkan.depth.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_ASPECT_DEPTH_BIT);
-
-        VkRenderingAttachmentInfo color = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        color.imageView = c->vulkan.views[c->vulkan.currentImageIndex];
-        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        color.clearValue.color = {{0.1f, 0.3f, 0.6f, 1.0f}};
-        VkRenderingInfo ri = {VK_STRUCTURE_TYPE_RENDERING_INFO};
-        ri.renderArea = {{0,0},c->vulkan.swapchain.extent};
-        ri.layerCount = 1;
-        ri.colorAttachmentCount = 1;
-        ri.pColorAttachments = &color;
-        VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        depth.imageView = c->vulkan.depth.view;
-        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        depth.clearValue.depthStencil = {1.0f, 0};
-        ri.pDepthAttachment = &depth;
-        vkCmdBeginRendering(f.cmd,&ri);
-
-        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline->pipeline);
-
-        VkExtent2D e = c->vulkan.swapchain.extent;
-        VkViewport viewport{0.0f, 0.0f, (float)e.width, (float)e.height, 0.0f, 1.0f};
-        VkRect2D scissor{{0, 0}, e};
-        vkCmdSetViewport(f.cmd, 0, 1, &viewport);
-        vkCmdSetScissor(f.cmd, 0, 1, &scissor);
-
-        bool noScene = false;
-        if (Scene* scene = c->manager.get(c->currentScene)) {
-            (void)scene->draw(f.cmd);
-        } else {
-            noScene = ErrorHandeling::handleError(Error{ErrorCode::NoSceneBound,"renderFrame(): no scene is bound, so the frame is empty. "
-                                                         "Create one with createScene() or bind one with bindScene()."});
+        if (functionMode) {
+            // Camera and lights for this frame. The draw calls then only push their model matrix and bind materials.
+            (void)scene->bindFrameData(f.cmd);
+            c->vulkan.frameRecording = true;
+            return {};
         }
-        #ifdef  NRE_UNSAFE_API
-        if (c->unsafeContext.frameCallback) {
-            c->unsafeContext.frameCallback(f.cmd);
-        }
-        #endif
-
-        vkCmdEndRendering(f.cmd);
-        transition(f.cmd,c->vulkan.images[c->vulkan.currentImageIndex],VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-        vkEndCommandBuffer(f.cmd);
-        if (!c->config.manualFramePresentationAndSubmission) {
-            submitFrame();
-            presentFrame();
-        }
-        if (noScene) {
-            return std::unexpected(Error{ErrorCode::NoSceneBound,"renderFrame(): no scene is bound, so the frame is empty. "
-                                         "Create one with createScene() or bind one with bindScene()."});
-        }
+        (void)scene->draw(f.cmd);
+        finishFrame(c);
         return {};
+    }
+
+    Result<void> endFrame() {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+#ifndef NDEBUG
+        if (c->config.apiMode != ApiMode::FunctionDrawMode) {
+            auto error = Error{ErrorCode::WrongMode, "endFrame(): only used in ApiMode::FunctionDrawMode; in SceneMode "
+                               "renderFrame() draws the whole frame. Set apiMode in the RenderConfig to use draw functions."};
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);
+        }
+        if (!c->vulkan.isDrawing) {
+            auto error = Error{ErrorCode::WrongMode, "endFrame(): no frame was started. Call renderFrame() before the draw calls."};
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);
+        }
+#endif
+        c->vulkan.isDrawing = false;
+        if (!c->vulkan.frameRecording) return {};   // renderFrame() skipped this frame
+        c->vulkan.frameRecording = false;
+        finishFrame(c);
+        return {};
+    }
+
+    Result<void> drawModel(Handel<Model> model, const Transform& transform) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        auto ok = canDraw(c, std::source_location::current());
+        if (!ok || !*ok) return ok.transform([](bool) {});
+        Model* m = c->manager.get(model);
+        if (!m) {
+            auto error = ErrorHandeling::badHandle("model", model, "createModel()", std::source_location::current());
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};
+        }
+        Frame& f = c->vulkan.frames[c->vulkan.currentFrame % max_frames_in_flight];
+        // renderFrame() checked it, but it could have been destroyed since.
+        Pipeline* pipeline = c->manager.get(c->vulkan.pipelineBound);
+        if (!pipeline) return {};
+        return m->draw(f.cmd, *pipeline, transform.matrix());
+    }
+
+    Result<void> drawInstance(Handel<Instance> instance) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        auto ok = canDraw(c, std::source_location::current());
+        if (!ok || !*ok) return ok.transform([](bool) {});
+        Instance* i = c->manager.get(instance);
+        if (!i) {
+            auto error = ErrorHandeling::badHandle("instance", instance, "createInstance()", std::source_location::current());
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};
+        }
+        if (!i->visible) return {};
+        Model* m = c->manager.get(i->model);
+        Pipeline* pipeline = c->manager.get(c->vulkan.pipelineBound);
+        if (!m || !pipeline) return {};   // like Scene::draw: instances of a destroyed model draw nothing
+        Frame& f = c->vulkan.frames[c->vulkan.currentFrame % max_frames_in_flight];
+        return m->draw(f.cmd, *pipeline, i->transform.matrix());
     }
 
     Result<void> submitFrame() {
@@ -511,7 +685,6 @@ namespace NRE {
         NRE_REQUIRE_CONTEXT(c);
         return {c->window.shouldClose};
     }
-
     Result<void> pollEvents() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
