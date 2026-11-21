@@ -1,9 +1,18 @@
 cmake_minimum_required(VERSION 3.28)
-project(VulkanRenderer LANGUAGES CXX)
+# Bump on every release, together with a matching git tag (vX.Y.Z).
+# While 0.x: bump the minor for breaking API/ABI changes, the patch for fixes.
+project(VulkanRenderer VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Only when building NRE itself: put the app and librenderer.so together in bin/.
+# A project that fetches NRE keeps its own output layout.
+if(PROJECT_IS_TOP_LEVEL)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
+endif()
 
 # OFF: NRE::Unsafe (renderer_unsafe.h) isn't compiled, so librenderer.so doesn't contain or export it.
 # The *-unsafe presets in CMakePresets.json turn it on.
@@ -12,7 +21,7 @@ option(NRE_UNSAFE_API "Build and export NRE::Unsafe: raw Vulkan/GLFW handles fro
 # ---------------------------------------------------------------------------
 # System dependencies
 # ---------------------------------------------------------------------------
-find_package(Vulkan 1.3 REQUIRED COMPONENTS glslc)
+find_package(Vulkan 1.3 REQUIRED)
 find_package(glfw3 3.4 REQUIRED)
 
 # ---------------------------------------------------------------------------
@@ -88,40 +97,18 @@ add_library(stb_image INTERFACE)
 target_include_directories(stb_image SYSTEM INTERFACE ${stb_SOURCE_DIR})
 
 # ---------------------------------------------------------------------------
-# Shaders: every .vert/.frag/.comp in shaders/ is compiled to build/shaders/*.spv
+# Shaders: nre_compile_shaders(<target> <shader_dir>), usable by the demo and
+# by projects that fetch NRE.
 # ---------------------------------------------------------------------------
-set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
-set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
-
-file(GLOB_RECURSE SHADER_SOURCES CONFIGURE_DEPENDS
-    ${SHADER_SRC_DIR}/*.vert
-    ${SHADER_SRC_DIR}/*.frag
-    ${SHADER_SRC_DIR}/*.comp
-)
-
-set(SHADER_BINARIES)
-foreach(SHADER ${SHADER_SOURCES})
-    get_filename_component(SHADER_NAME ${SHADER} NAME)
-    set(SPV ${SHADER_OUT_DIR}/${SHADER_NAME}.spv)
-    add_custom_command(
-        OUTPUT  ${SPV}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT_DIR}
-        COMMAND Vulkan::glslc --target-env=vulkan1.3 -O -g -MD -MF ${SPV}.d -o ${SPV} ${SHADER}
-        DEPENDS ${SHADER}
-        DEPFILE ${SPV}.d
-        COMMENT "Compiling shader ${SHADER_NAME}"
-        VERBATIM
-    )
-    list(APPEND SHADER_BINARIES ${SPV})
-endforeach()
-
-add_custom_target(shaders DEPENDS ${SHADER_BINARIES})
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NREShaders.cmake)
 
 # ---------------------------------------------------------------------------
 # Renderer: shared library (librenderer.so)
 #
-# Swap renderers by replacing bin/librenderer.so with another build of the same
-# API header. The app looks next to itself first ($ORIGIN), and
+# The app links against the SONAME (librenderer.so.0.1 while at 0.1.x), so
+# swapping renderers works between builds with the same SONAME. A breaking
+# release changes it, and an old app then refuses to load the new .so instead
+# of crashing. The app looks next to itself first ($ORIGIN), and
 # LD_LIBRARY_PATH overrides that.
 # ---------------------------------------------------------------------------
 # Sources live in subsystem folders (core/, gpu/, pipeline/, scene/) and are
@@ -134,19 +121,25 @@ if(NOT NRE_UNSAFE_API)
     list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/src/renderer/unsafe/")
 endif()
 
-add_library(renderer SHARED ${RENDERER_SOURCES}
-        src/renderer/gpu/image.cpp
-        src/renderer/gpu/image.h
-        src/renderer/gpu/materials.cpp
-        src/renderer/gpu/materials.h
-        src/renderer/gpu/UBOAndSSBO.cpp
-        src/renderer/gpu/UBOAndSSBO.h)
-add_dependencies(renderer shaders)
+add_library(renderer SHARED ${RENDERER_SOURCES})
+add_library(NRE::renderer ALIAS renderer)
+
+# The public headers use C++23 (std::expected), so apps need at least that.
+target_compile_features(renderer PUBLIC cxx_std_23)
+
+# While 0.x every minor release may break the ABI, so it's part of the SONAME.
+if(PROJECT_VERSION_MAJOR EQUAL 0)
+    set(NRE_SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR})
+else()
+    set(NRE_SOVERSION ${PROJECT_VERSION_MAJOR})
+endif()
 
 # Only symbols marked RENDERER_API are exported; vk-bootstrap, VMA and the
 # renderer internals stay hidden.
 set_target_properties(renderer PROPERTIES
     OUTPUT_NAME               renderer
+    VERSION                   ${PROJECT_VERSION}
+    SOVERSION                 ${NRE_SOVERSION}
     CXX_VISIBILITY_PRESET     hidden
     VISIBILITY_INLINES_HIDDEN ON
 )
@@ -189,8 +182,6 @@ target_compile_definitions(renderer
     PUBLIC
         GLM_FORCE_DEPTH_ZERO_TO_ONE
         GLM_FORCE_RADIANS
-        SHADER_DIR="${SHADER_OUT_DIR}"
-        ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
     PRIVATE
         GLFW_INCLUDE_VULKAN
         $<$<CONFIG:Debug>:RENDERER_ENABLE_VALIDATION>
@@ -203,27 +194,13 @@ if(NRE_UNSAFE_API)
     target_link_libraries(renderer PUBLIC Vulkan::Headers)
 endif()
 
-# ---------------------------------------------------------------------------
-# App
-# ---------------------------------------------------------------------------
-add_executable(VulkanRenderer src/main.cpp)
-
-target_link_libraries(VulkanRenderer PRIVATE renderer)
-
-set_target_properties(VulkanRenderer PROPERTIES
-    BUILD_RPATH   "$ORIGIN"
-    INSTALL_RPATH "$ORIGIN"
-)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(renderer PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
+endif()
 
 # ---------------------------------------------------------------------------
-# Common settings
+# Demo app: skipped automatically when another project fetches NRE.
 # ---------------------------------------------------------------------------
-foreach(TARGET renderer VulkanRenderer)
-    set_target_properties(${TARGET} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin
-        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin
-    )
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
-    endif()
-endforeach()
+if(PROJECT_IS_TOP_LEVEL)
+    add_subdirectory(example)
+endif()
