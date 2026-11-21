@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 # Bump on every release, together with a matching git tag (vX.Y.Z).
 # While 0.x: bump the minor for breaking API/ABI changes, the patch for fixes.
-project(VulkanRenderer VERSION 0.1.0 LANGUAGES CXX)
+project(VulkanRenderer VERSION 0.1.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -121,11 +121,49 @@ if(NOT NRE_UNSAFE_API)
     list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/src/renderer/unsafe/")
 endif()
 
+# ---------------------------------------------------------------------------
+# Public headers: what both NRE::renderer and NRE::renderer_dynamic give the
+# app. Everything here must match on both sides of the API.
+# ---------------------------------------------------------------------------
+add_library(renderer_headers INTERFACE)
+
+# renderer_version.h: the version, and the library's file name for the runtime
+# loader. Generated per configuration, since the build path differs per config.
+if(WIN32)
+    set(NRE_LIBRARY_FILE       "$<TARGET_FILE_NAME:renderer>")
+    set(NRE_LIBRARY_BUILD_PATH "$<TARGET_FILE:renderer>")
+else()
+    set(NRE_LIBRARY_FILE       "$<TARGET_SONAME_FILE_NAME:renderer>")
+    set(NRE_LIBRARY_BUILD_PATH "$<TARGET_SONAME_FILE:renderer>")
+endif()
+configure_file(cmake/renderer_version.h.in ${CMAKE_CURRENT_BINARY_DIR}/renderer_version.h.in @ONLY)
+file(GENERATE
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/version/$<CONFIG>/renderer_version.h
+    INPUT  ${CMAKE_CURRENT_BINARY_DIR}/renderer_version.h.in
+)
+
+target_include_directories(renderer_headers INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_BINARY_DIR}/include                  # renderer_export.h
+    ${CMAKE_CURRENT_BINARY_DIR}/version/$<CONFIG>        # renderer_version.h
+)
+target_link_libraries(renderer_headers INTERFACE glm::glm)
+# The public headers use C++23 (std::expected), so apps need at least that.
+target_compile_features(renderer_headers INTERFACE cxx_std_23)
+target_compile_definitions(renderer_headers INTERFACE
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_FORCE_RADIANS
+)
+if(NRE_UNSAFE_API)
+    # renderer_unsafe.h refuses to compile without it.
+    target_compile_definitions(renderer_headers INTERFACE NRE_UNSAFE_API)
+    # renderer_unsafe.h uses Vulkan types, so the app needs the Vulkan headers (not the loader library).
+    target_link_libraries(renderer_headers INTERFACE Vulkan::Headers)
+endif()
+
 add_library(renderer SHARED ${RENDERER_SOURCES})
 add_library(NRE::renderer ALIAS renderer)
-
-# The public headers use C++23 (std::expected), so apps need at least that.
-target_compile_features(renderer PUBLIC cxx_std_23)
+target_link_libraries(renderer PUBLIC renderer_headers)
 
 # While 0.x every minor release may break the ABI, so it's part of the SONAME.
 if(PROJECT_VERSION_MAJOR EQUAL 0)
@@ -156,17 +194,9 @@ generate_export_header(renderer
     EXPORT_FILE_NAME ${CMAKE_CURRENT_BINARY_DIR}/include/renderer_export.h
 )
 
-target_include_directories(renderer
-    PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_BINARY_DIR}/include
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer
-)
+target_include_directories(renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer)
 
 target_link_libraries(renderer
-    PUBLIC
-        glm::glm
     PRIVATE
         Vulkan::Vulkan
         vk-bootstrap::vk-bootstrap
@@ -177,25 +207,35 @@ target_link_libraries(renderer
         glfw
 )
 
-# PUBLIC defines must match on both sides of the API, so the app gets them too.
 target_compile_definitions(renderer
-    PUBLIC
-        GLM_FORCE_DEPTH_ZERO_TO_ONE
-        GLM_FORCE_RADIANS
     PRIVATE
         GLFW_INCLUDE_VULKAN
         $<$<CONFIG:Debug>:RENDERER_ENABLE_VALIDATION>
 )
 
-if(NRE_UNSAFE_API)
-    # PUBLIC so the app sees it too: renderer_unsafe.h refuses to compile without it.
-    target_compile_definitions(renderer PUBLIC NRE_UNSAFE_API)
-    # renderer_unsafe.h uses Vulkan types, so the app needs the Vulkan headers (not the loader library).
-    target_link_libraries(renderer PUBLIC Vulkan::Headers)
-endif()
-
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(renderer PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
+endif()
+
+# ---------------------------------------------------------------------------
+# Optional runtime loading: link NRE::renderer_dynamic instead of
+# NRE::renderer, and call NRE::loadRenderer() (renderer_dynamic.h) first.
+# The app then doesn't link librenderer; it dlopens / LoadLibrary's it, and
+# every NRE:: function calls through the library's function table.
+# ---------------------------------------------------------------------------
+add_library(renderer_dynamic STATIC ${CMAKE_CURRENT_SOURCE_DIR}/src/dynamic/loader.cpp)
+add_library(NRE::renderer_dynamic ALIAS renderer_dynamic)
+target_link_libraries(renderer_dynamic
+    PUBLIC  renderer_headers
+    PRIVATE ${CMAKE_DL_LIBS}
+)
+# The app defines the NRE:: functions itself (as forwarders), so RENDERER_API
+# must not mark them as imported from a DLL.
+target_compile_definitions(renderer_dynamic PUBLIC RENDERER_STATIC_DEFINE)
+# Not linked, but still needed at runtime: build it whenever the app is built.
+add_dependencies(renderer_dynamic renderer)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(renderer_dynamic PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
 endif()
 
 # ---------------------------------------------------------------------------

@@ -66,6 +66,8 @@ namespace NRE {
         DescriptorCreationFailed,
         ShaderCreationFailed,
         UnknownError,
+        // Added after 0.1.0: new codes go at the end so the existing values don't change.
+        LibraryLoadFailed,
     };
     struct WindowConfig {
         int width,height;
@@ -117,6 +119,7 @@ namespace NRE {
             case ErrorCode::SizeOfBufferToBig: return "SizeOfBufferToBig";
             case ErrorCode::DescriptorCreationFailed: return "DescriptorCreationFailed";
             case ErrorCode::ShaderCreationFailed: return "ShaderCreationFailed";
+            case ErrorCode::LibraryLoadFailed: return "LibraryLoadFailed";
         }
         return "UnknownError. Not in enum.";
     }
