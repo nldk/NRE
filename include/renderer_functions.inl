@@ -78,6 +78,13 @@ NRE_FUNCTION(Result<float>, getDeltaTime, (), ())
 NRE_FUNCTION(Result<bool>, isMouseButtonDown, (MouseButton button), (button))
 NRE_FUNCTION(Result<glm::vec2>, getMouseDelta, (), ())
 NRE_FUNCTION(Result<float>, getScrollDelta, (), ())
+NRE_FUNCTION(Result<bool>, isMouseButtonPressed, (MouseButton button), (button))
+NRE_FUNCTION(Result<bool>, isMouseButtonReleased, (MouseButton button), (button))
+NRE_FUNCTION(Result<glm::vec2>, getMousePosition, (), ())
+NRE_FUNCTION(Result<void>, setCursorMode, (CursorMode mode), (mode))
+NRE_FUNCTION(Result<bool>, isKeyDown, (Key key), (key))
+NRE_FUNCTION(Result<bool>, isKeyPressed, (Key key), (key))
+NRE_FUNCTION(Result<bool>, isKeyReleased, (Key key), (key))
 
 #ifdef NRE_UNSAFE_API
 NRE_UNSAFE_FUNCTION(GLFWwindow*, getWindow, (), ())

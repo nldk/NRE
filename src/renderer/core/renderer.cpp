@@ -97,6 +97,19 @@ namespace NRE {
     void scrollCallback(GLFWwindow*, double, double yOffset) {
         if (auto c = context()) c->window.scrollDelta += static_cast<float>(yOffset);
     }
+    // Events instead of polling glfwGetKey, so a tap that starts and ends between two pollEvents calls isn't missed.
+    void keyCallback(GLFWwindow*, int key, int, int action, int) {
+        auto c = context();
+        if (!c || key < 0 || key > GLFW_KEY_LAST) return;   // GLFW_KEY_UNKNOWN is -1
+        if (action == GLFW_PRESS) c->window.keysPressed.set(key);
+        else if (action == GLFW_RELEASE) c->window.keysReleased.set(key);
+    }
+    void mouseButtonCallback(GLFWwindow*, int button, int action, int) {
+        auto c = context();
+        if (!c || button < 0 || button > GLFW_MOUSE_BUTTON_LAST) return;
+        if (action == GLFW_PRESS) c->window.buttonsPressed.set(button);
+        else if (action == GLFW_RELEASE) c->window.buttonsReleased.set(button);
+    }
 
     void updateFrameTimer(Context* c) {
         constexpr double fpsWindow = 0.5;
@@ -255,6 +268,8 @@ namespace NRE {
         glfwSetWindowCloseCallback(c->window.window,closeCallback);
         glfwSetFramebufferSizeCallback(c->window.window,framebufferSizeCallback);
         glfwSetScrollCallback(c->window.window,scrollCallback);
+        glfwSetKeyCallback(c->window.window,keyCallback);
+        glfwSetMouseButtonCallback(c->window.window,mouseButtonCallback);
         // Start from the real cursor position, so the first getMouseDelta isn't a jump from (0, 0).
         glfwGetCursorPos(c->window.window, &c->window.cursor.x, &c->window.cursor.y);
         c->timer.lastFrameTime = c->timer.windowStart = glfwGetTime();
@@ -689,6 +704,10 @@ namespace NRE {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         c->window.scrollDelta = 0.0f;   // scrollCallback adds this frame's scrolling during glfwPollEvents
+        c->window.keysPressed.reset();
+        c->window.keysReleased.reset();
+        c->window.buttonsPressed.reset();
+        c->window.buttonsReleased.reset();
         glfwPollEvents();
         glm::dvec2 cursor;
         glfwGetCursorPos(c->window.window, &cursor.x, &cursor.y);
@@ -1078,6 +1097,73 @@ namespace NRE {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         return c->window.scrollDelta;
+    }
+
+    Result<bool> isMouseButtonPressed(MouseButton button) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return c->window.buttonsPressed[int(button)];
+    }
+
+    Result<bool> isMouseButtonReleased(MouseButton button) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return c->window.buttonsReleased[int(button)];
+    }
+
+    Result<glm::vec2> getMousePosition() {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return glm::vec2(c->window.cursor);
+    }
+
+    Result<void> setCursorMode(CursorMode mode) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        int glfwMode = GLFW_CURSOR_NORMAL;
+        switch (mode) {
+            case CursorMode::Normal: glfwMode = GLFW_CURSOR_NORMAL; break;
+            case CursorMode::Hidden: glfwMode = GLFW_CURSOR_HIDDEN; break;
+            case CursorMode::Locked: glfwMode = GLFW_CURSOR_DISABLED; break;
+        }
+        glfwSetInputMode(c->window.window, GLFW_CURSOR, glfwMode);
+        // Locking (and unlocking) moves the cursor, so start over from where it is now: otherwise the next
+        // getMouseDelta would include that jump.
+        glfwGetCursorPos(c->window.window, &c->window.cursor.x, &c->window.cursor.y);
+        return {};
+    }
+
+    // Key's values are GLFW's key codes, so they're passed straight through. Checks the first and last key
+    // of every run of consecutive values.
+    static_assert(int(Key::Space) == GLFW_KEY_SPACE && int(Key::Apostrophe) == GLFW_KEY_APOSTROPHE
+                  && int(Key::Comma) == GLFW_KEY_COMMA && int(Key::Slash) == GLFW_KEY_SLASH
+                  && int(Key::Zero) == GLFW_KEY_0 && int(Key::Nine) == GLFW_KEY_9
+                  && int(Key::Semicolon) == GLFW_KEY_SEMICOLON && int(Key::Equal) == GLFW_KEY_EQUAL
+                  && int(Key::A) == GLFW_KEY_A && int(Key::Z) == GLFW_KEY_Z
+                  && int(Key::LeftBracket) == GLFW_KEY_LEFT_BRACKET && int(Key::RightBracket) == GLFW_KEY_RIGHT_BRACKET
+                  && int(Key::GraveAccent) == GLFW_KEY_GRAVE_ACCENT
+                  && int(Key::Escape) == GLFW_KEY_ESCAPE && int(Key::End) == GLFW_KEY_END
+                  && int(Key::CapsLock) == GLFW_KEY_CAPS_LOCK && int(Key::Pause) == GLFW_KEY_PAUSE
+                  && int(Key::F1) == GLFW_KEY_F1 && int(Key::F12) == GLFW_KEY_F12
+                  && int(Key::Keypad0) == GLFW_KEY_KP_0 && int(Key::KeypadEqual) == GLFW_KEY_KP_EQUAL
+                  && int(Key::LeftShift) == GLFW_KEY_LEFT_SHIFT && int(Key::Menu) == GLFW_KEY_MENU);
+
+    Result<bool> isKeyDown(Key key) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return glfwGetKey(c->window.window, int(key)) == GLFW_PRESS;
+    }
+
+    Result<bool> isKeyPressed(Key key) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return c->window.keysPressed[int(key)];
+    }
+
+    Result<bool> isKeyReleased(Key key) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return c->window.keysReleased[int(key)];
     }
 
     namespace {

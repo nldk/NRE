@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 #include "VkBootstrap.h"
 #include <vk_mem_alloc.h>
+#include <bitset>
 #include <vector>
 #include "core/resourceManagement.h"
 #include "renderer.h"
@@ -64,6 +65,10 @@ namespace NRE {
         glm::dvec2 cursor{0.0};
         glm::vec2 cursorDelta{0.0f};
         float scrollDelta = 0.0f;
+        // What went down / up during the last pollEvents call. Set by keyCallback / mouseButtonCallback,
+        // cleared at the start of the next pollEvents.
+        std::bitset<GLFW_KEY_LAST + 1> keysPressed, keysReleased;
+        std::bitset<GLFW_MOUSE_BUTTON_LAST + 1> buttonsPressed, buttonsReleased;
     };
 
     struct FrameTimer {

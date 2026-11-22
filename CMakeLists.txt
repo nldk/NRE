@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 # Bump on every release, together with a matching git tag (vX.Y.Z).
 # While 0.x: bump the minor for breaking API/ABI changes, the patch for fixes.
-project(VulkanRenderer VERSION 0.1.1 LANGUAGES CXX)
+project(VulkanRenderer VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -105,7 +105,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NREShaders.cmake)
 # ---------------------------------------------------------------------------
 # Renderer: shared library (librenderer.so)
 #
-# The app links against the SONAME (librenderer.so.0.1 while at 0.1.x), so
+# The app links against the SONAME (librenderer.so.0.2 while at 0.2.x), so
 # swapping renderers works between builds with the same SONAME. A breaking
 # release changes it, and an old app then refuses to load the new .so instead
 # of crashing. The app looks next to itself first ($ORIGIN), and

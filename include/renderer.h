@@ -28,6 +28,29 @@ namespace NRE {
         Right,
         Middle,
     };
+    // Physical keys, named after the US layout (Key::W is the key where W is on a US keyboard, whatever the layout).
+    // The values are GLFW's key codes.
+    enum class Key {
+        Space = 32, Apostrophe = 39, Comma = 44, Minus = 45, Period = 46, Slash = 47,
+        Zero = 48, One, Two, Three, Four, Five, Six, Seven, Eight, Nine,
+        Semicolon = 59, Equal = 61,
+        A = 65, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+        LeftBracket = 91, Backslash = 92, RightBracket = 93, GraveAccent = 96,
+        Escape = 256, Enter, Tab, Backspace, Insert, Delete, Right, Left, Down, Up, PageUp, PageDown, Home, End,
+        CapsLock = 280, ScrollLock, NumLock, PrintScreen, Pause,
+        F1 = 290, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+        Keypad0 = 320, Keypad1, Keypad2, Keypad3, Keypad4, Keypad5, Keypad6, Keypad7, Keypad8, Keypad9,
+        KeypadDecimal, KeypadDivide, KeypadMultiply, KeypadSubtract, KeypadAdd, KeypadEnter, KeypadEqual,
+        LeftShift = 340, LeftControl, LeftAlt, LeftSuper, RightShift, RightControl, RightAlt, RightSuper, Menu,
+    };
+    enum class CursorMode {
+        Normal,
+        // Invisible while it's over the window, but moves and leaves the window as usual.
+        Hidden,
+        // Hidden and kept in the window, with unlimited movement: for mouse-look cameras.
+        // getMouseDelta keeps working; getMousePosition is no longer a point in the window.
+        Locked,
+    };
     enum class RenderErrorPolicy {
         Ignore,
         Return,
@@ -271,6 +294,19 @@ namespace NRE {
     RENDERER_API Result<glm::vec2> getMouseDelta();
     // Scroll wheel steps. Positive means scrolling up / away from you.
     RENDERER_API Result<float> getScrollDelta();
+    // Pressed / released: the button went down / up during the last pollEvents call, so it's true for one frame.
+    // A click shorter than a frame shows up as both pressed and released, while isMouseButtonDown stays false.
+    RENDERER_API Result<bool> isMouseButtonPressed(MouseButton button);
+    RENDERER_API Result<bool> isMouseButtonReleased(MouseButton button);
+    // Cursor position in pixels from the window's top-left corner, as of the last pollEvents call.
+    RENDERER_API Result<glm::vec2> getMousePosition();
+    RENDERER_API Result<void> setCursorMode(CursorMode mode);
+
+    // Keyboard input. Same rules as the mouse buttons: pressed / released are true for the one frame
+    // after the pollEvents call that saw it happen. Holding a key doesn't repeat isKeyPressed.
+    RENDERER_API Result<bool> isKeyDown(Key key);
+    RENDERER_API Result<bool> isKeyPressed(Key key);
+    RENDERER_API Result<bool> isKeyReleased(Key key);
 
 };
 

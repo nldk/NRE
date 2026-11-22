@@ -29,7 +29,7 @@
 
 namespace NRE {
     // Loads the renderer library and points every NRE:: function at it.
-    // An empty path loads the library this app was built against (NRE_LIBRARY_FILE, e.g. librenderer.so.0.1):
+    // An empty path loads the library this app was built against (NRE_LIBRARY_FILE, e.g. librenderer.so.0.2):
     // first next to the executable, then where it was built, then the system's library search path.
     // Fails with ErrorCode::LibraryLoadFailed if it can't be loaded or isn't compatible.
     Result<void> loadRenderer(const std::string& path = {});
