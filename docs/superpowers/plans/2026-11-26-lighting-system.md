@@ -145,7 +145,7 @@ sun shadows (Task 6) · 4 `samplerCube` irradiance · 5 `samplerCube` prefiltere
 - [ ] **Step 2: Build and run** `cmake --preset debug-unsafe && cmake --build cmake-build-debug-unsafe && ctest --test-dir cmake-build-debug-unsafe -R "capture-clear|baseline" --output-on-failure`. Expected: baselines fail (no goldens yet), capture-clear passes.
 - [ ] **Step 3: Write goldens:** `cmake-build-debug-unsafe/bin/nre_visual_test baseline-car --update-golden` (same for skybox). Look at the PNGs before committing: car centred, sky correct.
 - [ ] **Step 4: Run again.** Expected: all three pass.
-- [ ] **Step 5: Record the performance baseline** (Release): `cmake --build cmake-build-release && cmake-build-release/bin/nre_benchmark --frames 600 static moving`; paste the summary's render-ms numbers into `tests/perf-baseline.md`.
+- [ ] **Step 5: Record the performance baseline** (Release): `cmake --build cmake-build-release && cmake-build-release/bin/nre_benchmark --frames 600 static move`; paste the summary's render-ms numbers into `tests/perf-baseline.md`.
 - [ ] **Step 6: Commit** `git commit -m "Add offscreen visual tests and pre-lighting baselines"`
 
 ### Task 3: Reverse-Z with an infinite far plane
@@ -188,7 +188,7 @@ sun shadows (Task 6) · 4 `samplerCube` irradiance · 5 `samplerCube` prefiltere
 - [ ] **Step 2: Run:** expected FAIL (functions missing).
 - [ ] **Step 3: Implement** as in Interfaces. `tonemap.frag`: `toneMapACES(hdr * exposure)` (or copy when `passthrough2D`). In 2D mode nothing else changes.
 - [ ] **Step 4: Run all visual tests.** Expected: new ones pass; `capture-clear`, `baseline-car`, `baseline-skybox` still match goldens (the tone curve now runs once, in the pass).
-- [ ] **Step 5: Perf check (Release):** `nre_benchmark --frames 600 static moving`. Expected: render ms within 5% of `tests/perf-baseline.md`; if not, stop and report.
+- [ ] **Step 5: Perf check (Release):** `nre_benchmark --frames 600 static move`. Expected: render ms within 5% of `tests/perf-baseline.md`; if not, stop and report.
 - [ ] **Step 6: Commit** `git commit -m "Render to an HDR target and tone map once at the end"`
 
 ### Task 5: Materials, `FrameData` layout and the GLSL include
@@ -344,6 +344,6 @@ sun shadows (Task 6) · 4 `samplerCube` irradiance · 5 `samplerCube` prefiltere
 
 - [ ] **Step 1: Dynamic-loading check:** build `example` once against `NRE::renderer_dynamic` in a scratch CMake project (or temporarily) and call every new function. Expected: links and runs.
 - [ ] **Step 2: Full test run** in Debug-unsafe: `ctest --test-dir cmake-build-debug-unsafe --output-on-failure`. Expected: all pass, no validation errors.
-- [ ] **Step 3: Release perf:** `nre_benchmark --frames 600 static moving` within 5% of `tests/perf-baseline.md`; `nre_visual_test perf-landscape` ≤ 6.06 ms.
+- [ ] **Step 3: Release perf:** `nre_benchmark --frames 600 static move` within 5% of `tests/perf-baseline.md`; `nre_visual_test perf-landscape` ≤ 6.06 ms.
 - [ ] **Step 4: Builds:** `cmake --build` for debug, debug-unsafe, release, release-unsafe all succeed without new warnings in `src/renderer`.
 - [ ] **Step 5: Commit** `git commit -m "Lighting system: docs, example shaders, v0.3.0"`
