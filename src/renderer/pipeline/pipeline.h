@@ -20,10 +20,10 @@ namespace NRE {
         VkPipeline       pipeline = VK_NULL_HANDLE;
         // Empty: call createPipeline() to make it, to get its Result.
         Pipeline() = default;
-        // The defaults are for scene geometry. The skybox uses no culling and depthCompare LESS_OR_EQUAL without
-        // depthWrite, so it only fills the pixels still at the cleared far plane.
+        // The defaults are for scene geometry. The skybox uses no culling and depthCompare GREATER_OR_EQUAL without
+        // depthWrite, so it only fills the pixels still at the cleared far plane. Depth is reverse-Z (cleared to 0, nearer is greater).
         Pipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader, const VertexLayout& layout = {},
-                 VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT, VkCompareOp depthCompare = VK_COMPARE_OP_LESS,
+                 VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT, VkCompareOp depthCompare = VK_COMPARE_OP_GREATER,
                  bool depthWrite = true) {
             createPipeline(vertexShader, fragmentShader, layout, cullMode, depthCompare, depthWrite);
         };

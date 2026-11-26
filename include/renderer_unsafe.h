@@ -29,6 +29,7 @@ namespace NRE::Unsafe {
     RENDERER_API VmaAllocator_T* getAllocator();
     // Called every frame inside a render pass on the window, after the scene: bind your own pipeline and state.
     // With a render target set, the window pass only contains what the callback draws. Pass nullptr to remove it.
+    // Depth is reverse-Z: cleared to 0, nearer is greater, so depth-tested pipelines must use VK_COMPARE_OP_GREATER.
     RENDERER_API Result<void> registerFrameCallback(void (*frameCallback)(VkCommandBuffer commandBuffer));
 
     // Render to a texture: the scene is drawn into a width x height image instead of the window, and the

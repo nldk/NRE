@@ -26,7 +26,7 @@ if(NRE_UNSAFE_API)
     endif()
 
     # One test per scenario name registered with NRE_SCENARIO (underscores become dashes).
-    foreach(scenario capture-clear baseline-car baseline-skybox)
+    foreach(scenario capture-clear baseline-car baseline-skybox far-object)
         add_test(NAME ${scenario} COMMAND nre_visual_test ${scenario})
         set_tests_properties(${scenario} PROPERTIES
             FAIL_REGULAR_EXPRESSION "Validation Error"

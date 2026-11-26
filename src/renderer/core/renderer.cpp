@@ -13,6 +13,7 @@
 #include "defaultAssets/defaultAssets.h"
 #include "gpu/texture.h"
 #include "gpu/cubemap.h"
+#include "lighting/lightingMath.h"
 
 namespace NRE {
     namespace {std::unique_ptr<Context> globalContext = nullptr;}
@@ -150,7 +151,7 @@ namespace NRE {
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        depth.clearValue.depthStencil = {1.0f, 0};
+        depth.clearValue.depthStencil = {0.0f, 0};   // reverse-Z: far is 0
         VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
         ri.renderArea = {{0, 0}, extent};
         ri.layerCount = 1;
@@ -179,12 +180,10 @@ namespace NRE {
         float width = static_cast<float>(e.width);
         float height = static_cast<float>(e.height);
         if (c->config.mode == RenderMode::Render_3D) {
-            constexpr float fovY = glm::radians(60.0f), nearPlane = 0.1f, farPlane = 1000.0f;
-            c->vulkan.projection = glm::perspective(fovY, width / height, nearPlane, farPlane);
-            c->vulkan.projection[1][1] *= -1;
+            // Reverse-Z with an infinite far plane (depth 1 at the near plane, 0 at infinity); the Vulkan Y flip is included.
+            c->vulkan.projection = LightingMath::reverseZPerspective(glm::radians(60.0f), width / height, 0.1f);
         } else {
-
-            c->vulkan.projection = glm::ortho(0.0f, width, 0.0f, height, -1000.0f, 1000.0f);
+            c->vulkan.projection = LightingMath::reverseZOrtho(width, height, 1000.0f);
         }
     }
     Result<void> recreateSwapchain() {
@@ -429,10 +428,10 @@ namespace NRE {
             };
             Handel<Shader> vertex = c->manager.create(Shader(std::span(skyboxVert), ShaderType::VERTEX_SHADER));
             Handel<Shader> fragment = c->manager.create(Shader(std::span(skyboxFrag), ShaderType::FRAGMENT_SHADER));
-            // No vertex input (the vertex shader makes the triangle) and no culling. The sky sits at depth 1, the
-            // cleared value, so LESS_OR_EQUAL passes only where nothing was drawn, and it doesn't write depth.
+            // No vertex input (the vertex shader makes the triangle) and no culling. The sky sits at depth 0, the
+            // cleared value (reverse-Z), so GREATER_OR_EQUAL passes only where nothing was drawn, and it doesn't write depth.
             Pipeline skybox;
-            err = skybox.createPipeline(vertex, fragment, {}, VK_CULL_MODE_NONE, VK_COMPARE_OP_LESS_OR_EQUAL, false);
+            err = skybox.createPipeline(vertex, fragment, {}, VK_CULL_MODE_NONE, VK_COMPARE_OP_GREATER_OR_EQUAL, false);
             c->manager.destroy(vertex, true);   // the pipeline doesn't need the modules any more
             c->manager.destroy(fragment, true);
             if (!err) return err;

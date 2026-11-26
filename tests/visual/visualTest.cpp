@@ -130,6 +130,24 @@ NRE_SCENARIO(baseline_skybox) {
     return matchesGolden(renderAndCapture([] {}), "skybox.png");
 }
 
+// Box.glb scaled to 50 m at 5 km: beyond the old 1000 m far plane, so it only shows with the infinite far plane.
+NRE_SCENARIO(far_object) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto box = TRY(createInstance(model));
+    TRY(addInstanceToScene(box));
+    TRY(scaleInstance(box, glm::vec3(50.0f)));
+    TRY(translateInstance(box, glm::vec3(0.0f, 0.0f, -5000.0f)));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    Image image = renderAndCapture();
+    glm::vec3 clear{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    glm::vec3 centre = image.at(kWidth / 2, kHeight / 2);
+    CHECK(glm::max(glm::max(std::abs(centre.x - clear.x), std::abs(centre.y - clear.y)), std::abs(centre.z - clear.z)) > 10.0f / 255.0f);
+    return true;
+}
+
 int main(int argc, char** argv) {
     return runScenarios(argc, argv);
 }
