@@ -2,7 +2,7 @@
 // Built into librenderer (drawn by Sky::draw): the scene's sky behind everything, from nreSky (set 0 binding 2).
 //   skyParams.x 1, a cubemap: LDR display values, expanded with the inverse of the tone curve and divided by the
 //                  exposure, so after the tone-map pass it looks like the images it was made from, at any exposure.
-//   skyParams.x 2, procedural: linear HDR from the sky cubemap (Sky::update) times skyParams.z (sun intensity / 3),
+//   skyParams.x 2, procedural: linear HDR from the sky cubemap (Sky::update, the finished sky radiance),
 //                  plus the sun's disk. Goes through the exposure like the lit scene does.
 #include "nre/frame.glsl"
 #include "atmosphere.glsl"
@@ -27,7 +27,7 @@ void main() {
         return;
     }
     vec3 dir = normalize(direction);
-    vec3 color = textureLod(nreSky, dir, 0.0).rgb * nreFrame.skyParams.z;
+    vec3 color = textureLod(nreSky, dir, 0.0).rgb;
 
     // The sun's disk: sunRadiance (the light it gives, after the atmosphere and the horizon fade) spread over its
     // solid angle. Its edge covers a pixel partially, so it's blended by coverage. Hidden behind the ground.

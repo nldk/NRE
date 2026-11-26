@@ -23,10 +23,11 @@ NRE_ATMOSPHERE_SCALAR(sunAngularRadius, 0.0046690)   // 0.2675 deg in radians
 // (smoothstep). Wide enough (about two disk diameters) that a running sunset never pops; full strength at the horizon.
 NRE_ATMOSPHERE_SCALAR(sunFadeLowDeg, -0.95)
 NRE_ATMOSPHERE_SCALAR(sunFadeHighDeg, 0.0)
-// The setSun intensity of the standard look. The sky scales with intensity / standardIntensity; the procedural sky
-// cubemap holds it at this intensity.
+// The setSun intensity of the standard look. The sunlit sky scales with intensity / standardIntensity.
 NRE_ATMOSPHERE_SCALAR(standardIntensity, 3.0)
-NRE_ATMOSPHERE_RGB(nightFloor, 0.0025, 0.0045, 0.0100) // linear sky radiance at sun intensity 3
+// Linear radiance of the night sky, added always (invisible by day). It doesn't scale with the sun's intensity, so a
+// sunless Landscape scene shows night, not black.
+NRE_ATMOSPHERE_RGB(nightFloor, 0.0025, 0.0045, 0.0100)
 // The ground below the horizon of an empty world (the scene's own ground normally covers it): albedo, the sky light
 // on it, groundAmbient * max(sin(sun elevation) + 0.15, 0), and how much of the night floor it shows.
 NRE_ATMOSPHERE_SCALAR(groundAlbedo, 0.2)

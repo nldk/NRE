@@ -13,15 +13,17 @@ namespace NRE {
     // sky source but the plain colour). Lives in the VulkanContext, shared by all scenes; shutdown() calls destroy().
     //
     // The procedural sky is computed with two compute passes: a transmittance LUT (256x64, once in create()) and the
-    // sky cubemap (256^2 per face, RGBA16F, with a full mip chain) from it. The cubemap holds linear radiance at the
-    // standard sun intensity (3) with a white sun, night floor included; whoever reads it multiplies by intensity / 3
-    // (FrameData::skyParams.z). The sun's disk isn't in it: sky.frag draws it from FrameData::sunRadiance.
+    // sky cubemap (256^2 per face, RGBA16F, with a full mip chain) from it. The cubemap holds the finished linear
+    // radiance, as drawn: the sunlit part (white sun) times the scattering brightness (sun intensity / 3,
+    // FrameData::skyParams.z), plus the night floor, which doesn't depend on the intensity (so a sunless Landscape
+    // scene shows night, not black). The sun's disk isn't in it: sky.frag draws it from FrameData::sunRadiance.
     //
     // Frames in flight: there's one cubemap per frame slot (currentFrame % max_frames_in_flight), so a frame only
     // ever writes the cubemap that its own slot's previous frame (whose fence was waited on) read: never one a frame
     // still on the GPU uses. The scene's set 0 binding 2 of slot f points at cubemapView(f). The sky is regenerated
-    // at the current sun when it has moved more than regenerateAngle from the sun of the last regeneration; each slot
-    // then catches up once, so all slots show the same sky and consecutive frames never alternate between two.
+    // when the brightness changed or the sun moved more than regenerateAngle from the sun of the last regeneration
+    // (with brightness 0 the sun's direction doesn't matter); each slot then catches up once to that same sky, so all
+    // slots show the same sky and consecutive frames never alternate between two.
     //
     // Frame flow (recordFrame): update() before the shadow and main passes, in the same command buffer, when the
     // bound scene shows the procedural sky; draw() in the main pass after the geometry.
@@ -32,10 +34,14 @@ namespace NRE {
         VkDescriptorSet cubemapSets[max_frames_in_flight]{};
         VkSampler lutSampler = VK_NULL_HANDLE;        // linear, clamped to the edge
         Handel<Pipeline> drawPipeline;                // sky.vert + sky.frag, in the resource manager
-        glm::vec3 generatedSun{0.0f};                 // toward the sun, at the last regeneration
-        bool generated = false;
-        glm::vec3 slotSun[max_frames_in_flight]{};    // what each slot's cubemap was computed for
-        bool slotValid[max_frames_in_flight]{};
+        // What a cubemap was computed for: toward the sun, and the scattering brightness.
+        struct Generated {
+            glm::vec3 toSun{0.0f};
+            float brightness = -1.0f;   // never a real brightness: nothing computed yet
+            bool operator==(const Generated&) const = default;
+        };
+        Generated target;                             // the last regeneration's; every slot catches up to it
+        Generated slots[max_frames_in_flight];        // what each slot's cubemap holds
     public:
         static constexpr uint32_t lutWidth = 256, lutHeight = 64;
         static constexpr uint32_t cubemapSize = 256;
@@ -46,9 +52,10 @@ namespace NRE {
         Result<void> create();
         // Recomputes this frame slot's cubemap if it's behind the sun (see above): the compute pass, then the mips
         // (blits), then a barrier so the fragment and compute shaders after it read the result. Outside any render
-        // pass. sunDirection: the way the sunlight travels. True when it recomputed the cubemap (e.g. for the IBL to
-        // refilter from it in the same command buffer, after this).
-        bool update(VkCommandBuffer commandBuffer, glm::vec3 sunDirection);
+        // pass. sunDirection: the way the sunlight travels; brightness: the scattering brightness, sun intensity / 3
+        // (0: night floor only). True when it recomputed the cubemap (e.g. for the IBL to refilter from it in the
+        // same command buffer, after this).
+        bool update(VkCommandBuffer commandBuffer, glm::vec3 sunDirection, float brightness);
         // The sky behind what the main pass drew so far, for the scene's sky source this frame (writeFrameData):
         // cubemap or procedural; nothing for the plain colour (the clear colour is the sky then). Binds its pipeline
         // and the scene's set 0. Inside the main pass, Render_3D only.

@@ -26,11 +26,11 @@ but clearly night, never black. Ground in the sheet is a flat 0.2 albedo plane, 
 | Extinction | Rayleigh scatter + Mie (scatter + absorb) + ozone absorb, all per channel |
 | Optical depth integration | 64 midpoint steps, quadratic spacing t = tMax u^2 (dt = 2 tMax u / 64) |
 | Sky scatter gain (`skyScale`) | 10 (applied to single-scatter radiance, stands in for multiple scattering; stays at intensity 3, scales with intensity / 3) |
-| Night floor (linear radiance, intensity 3) | (0.0025, 0.0045, 0.0100), added to the sky always (invisible by day) |
+| Night floor (linear radiance) | (0.0025, 0.0045, 0.0100), added to the sky always (invisible by day), at any sun intensity (0.3 of it below the horizon) |
 
 Sky radiance (view march: 32 quadratic steps, 8 light-ray steps per sample in the prototype):
-`L = skyScale * (intensity / 3) * sum(sunTransmittanceAtSample * (rayleighPhase * betaR(h) + miePhase * betaM(h)) * viewTransmittance * dt) + nightFloor * (intensity / 3)`.
-The sun is white with unit irradiance inside the integral; the library multiplies by `intensity / 3`.
+`L = skyScale * (intensity / 3) * sum(sunTransmittanceAtSample * (rayleighPhase * betaR(h) + miePhase * betaM(h)) * viewTransmittance * dt) + nightFloor`.
+The sun is white with unit irradiance inside the integral; the library multiplies the sunlit part by `intensity / 3`. The night floor does not scale with the intensity (Task 8 fix round 1, ruling R36): a sunless Landscape scene (intensity 0) shows night, with the night exposure.
 Samples where the sample-to-sun ray hits the planet get zero sun light.
 
 ## Sun
@@ -73,12 +73,12 @@ The rise (about 4x at the horizon) is far smaller than the drop in light (sun x0
 warmer, not normalised to noon. Sky brightness (linear, before exposure, intensity 3), zenith / just above horizon:
 60 deg (0.062, 0.114, 0.227) / (0.33, 0.43, 0.44); 5 deg (0.023, 0.035, 0.057) / (0.46, 0.28, 0.09);
 0 deg (0.014, 0.014, 0.023) / (0.67, 0.085, 0.012); -4 deg (0.003, 0.005, 0.011); night = the floor (0.0025, 0.0045, 0.0100).
-At exposure 5 the night floor becomes about sRGB (13, 20, 38) after ACES.
+At exposure 5 the night floor becomes sRGB (16, 29, 59) after ACES (an earlier version of this note said (13, 20, 38), a miscalculation; the prototype and the GPU both give (16, 29, 59)).
 
 ## What Task 8's GPU implementation should match
 - Same constants and units (copy `Atmosphere::` values into `transmittanceLut.comp` / the sky shader), same quadratic
   midpoint optical-depth integration, same ozone tent profile, phase functions and `skyScale`.
-- `FrameData.skyParams.z` night level = the night floor, added to the sky radiance (and to the IBL source) scaled by `intensity / 3`.
+- `FrameData.skyParams.z` = the procedural sky's scattering brightness, `intensity / 3` (ruling R37). The sky cubemap (and so the IBL source) already holds the finished radiance: the sunlit part times it, plus the night floor, which does not scale.
 - Tone-map exposure in Landscape = `setExposure * autoExposure(elevation)`; sun below the horizon gives no sun light and no sun shadows.
 - Sun disk and sun light use the radiance above; the horizon rows near the sun can reach ~4 in linear radiance at 2 degrees (ACES clamps them).
 - No stars or moon. The prototype ground is not a requirement; ground comes from the scene.

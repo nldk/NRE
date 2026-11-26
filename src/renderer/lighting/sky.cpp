@@ -1,5 +1,6 @@
 #include "lighting/sky.h"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -15,7 +16,7 @@ namespace NRE {
         constexpr uint32_t groupSize = 8;   // local_size_x/y of both compute shaders
 
         // Matches the push constant block of skyCubemap.comp.
-        struct CubemapPush { glm::vec4 toSun; };
+        struct CubemapPush { glm::vec4 toSunAndBrightness; };
         // Matches the push constant block of sky.vert.
         struct DrawPush { glm::mat4 rayMatrix; glm::vec4 params; };
 
@@ -128,19 +129,18 @@ namespace NRE {
         });
     }
 
-    bool Sky::update(VkCommandBuffer cmd, glm::vec3 sunDirection) {
+    bool Sky::update(VkCommandBuffer cmd, glm::vec3 sunDirection, float brightness) {
         if (!ready()) return false;
         auto c = context();
         const uint32_t slot = c->vulkan.currentFrame % max_frames_in_flight;
         const float length = glm::length(sunDirection);
         const glm::vec3 toSun = length > 0.0f ? -sunDirection / length : glm::vec3(0.0f, -1.0f, 0.0f);
-        if (!generated || angleBetween(toSun, generatedSun) > regenerateAngle) {
-            generatedSun = toSun;
-            generated = true;
-        }
-        if (slotValid[slot] && slotSun[slot] == generatedSun) return false;
-        slotSun[slot] = generatedSun;
-        slotValid[slot] = true;
+        brightness = std::max(brightness, 0.0f);
+        // Without sunlight (brightness 0) only the night floor is left, whichever way the sun points.
+        const bool sunMoved = brightness > 0.0f && angleBetween(toSun, target.toSun) > regenerateAngle;
+        if (brightness != target.brightness || sunMoved) target = {brightness > 0.0f ? toSun : target.toSun, brightness};
+        if (slots[slot] == target) return false;
+        slots[slot] = target;
 
         const Cubemap& cubemap = cubemaps[slot];
         const VkImage image = cubemap.getImage();
@@ -149,7 +149,7 @@ namespace NRE {
         // slot's previous frame, which has finished (its fence was waited on before recording).
         imageBarrier(cmd, image, 0, 1, 6, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-        CubemapPush push{glm::vec4(generatedSun, 0.0f)};
+        CubemapPush push{glm::vec4(target.toSun, target.brightness)};
         const uint32_t groups = (cubemapSize + groupSize - 1) / groupSize;
         cubemapPass.dispatch(cmd, cubemapSets[slot], &push, groups, groups, 6);
 
@@ -234,8 +234,8 @@ namespace NRE {
         if (lutSampler) vkDestroySampler(c->vulkan.device, lutSampler, nullptr);
         lutSampler = VK_NULL_HANDLE;
         for (VkDescriptorSet& set : cubemapSets) set = VK_NULL_HANDLE;   // freed with the descriptor pool
-        generated = false;
-        for (bool& valid : slotValid) valid = false;
+        target = {};
+        for (Generated& s : slots) s = {};
         // The draw pipeline is in the resource manager: destroyAll() frees it.
     }
 }

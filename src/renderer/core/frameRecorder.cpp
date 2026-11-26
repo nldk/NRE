@@ -76,7 +76,7 @@ namespace NRE {
 
         // The procedural sky's cubemap for this frame slot, recomputed if the sun moved (compute, then a barrier to
         // the fragment shaders that read it). Before the main pass, which samples it (sky pass, ambient).
-        if (haveHdr && scene && scene->skySource == SkySource::Procedural) v.sky.update(cmd, scene->sunDirection);
+        if (haveHdr && scene && scene->skySource == SkySource::Procedural) v.sky.update(cmd, scene->sunDirection, scene->skyBrightness);
         // The sun's shadow maps, from the same draws (writeFrameData() set the cascades). Before the main pass, which
         // samples them.
         if (haveHdr && scene) v.shadowMaps.record(cmd, *scene, draws, scene->shadowCascades);

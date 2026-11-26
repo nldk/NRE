@@ -64,7 +64,10 @@ namespace NRE {
         const glm::vec3 transmittance = landscape ? LightingMath::sunTransmittance(elevation) : glm::vec3(1.0f);
         const glm::vec3 sunLight = sunColor * sunIntensity * transmittance;
         const bool sunUp = sunIntensity > 0.0f && glm::any(glm::greaterThan(transmittance, glm::vec3(0.0f)));
-        frameExposure = exposure * (landscape ? LightingMath::autoExposure(elevation) : 1.0f);
+        // No sun at all (intensity 0) is night, wherever its direction points: the night exposure (as at -10 degrees
+        // and below), only the night floor in the sky.
+        const float exposureElevation = sunIntensity > 0.0f ? elevation : -1.5707963f;
+        frameExposure = exposure * (landscape ? LightingMath::autoExposure(exposureElevation) : 1.0f);
 
         // Sun shadows (3D, with a sun): cascades splitting the view from the near plane to the shadow distance.
         const ShadowMaps& shadows = c->vulkan.shadowMaps;
@@ -95,10 +98,11 @@ namespace NRE {
         fd.sunRadiance = glm::vec4(sunLight, sunUp ? 1.0f : 0.0f);
         // The sky colour as linear light (the same expansion the clear colour gets, without the exposure).
         fd.skyColor = glm::vec4(LightingMath::inverseToneMapACES(skyColor), 0.0f);
-        // z: the procedural sky's brightness. Its cubemap holds the sky (night floor included) at the standard
-        // intensity, and the sky scales with the sun's intensity.
-        const float skyScale = skySource == SkySource::Procedural ? sunIntensity / float(LightingMath::Atmosphere::standardIntensity) : 0.0f;
-        fd.skyParams = glm::vec4(float(uint32_t(skySource)), 0.0f, skyScale, 0.0f);
+        // z: the procedural sky's scattering brightness: the sunlit sky scales with the sun's intensity (3 is the
+        // standard look), the night floor doesn't. Sky::update bakes both into the cubemap.
+        skyBrightness = skySource == SkySource::Procedural
+                      ? std::max(sunIntensity, 0.0f) / float(LightingMath::Atmosphere::standardIntensity) : 0.0f;
+        fd.skyParams = glm::vec4(float(uint32_t(skySource)), 0.0f, skyBrightness, 0.0f);
         fd.hazeParams = glm::vec4(0.0f);
         if (auto r = UBO.write(frame, &fd, sizeof(fd)); !r) return r;
 

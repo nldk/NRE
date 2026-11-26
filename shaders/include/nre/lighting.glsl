@@ -275,9 +275,9 @@ vec3 nreLights(Surface s) {
 }
 
 // The procedural sky (nreFrame.skyParams.x == 2) around dir, blurred by reading a smaller mip of its cubemap:
-// lod 0 is the sharp sky. Linear light, scaled to the sun's intensity.
+// lod 0 is the sharp sky. Linear light, as drawn (the sunlit sky at the sun's intensity, plus the night floor).
 vec3 nre_proceduralSky(vec3 dir, float lod) {
-    return textureLod(nreSky, dir, lod).rgb * nreFrame.skyParams.z;
+    return textureLod(nreSky, dir, lod).rgb;
 }
 
 // The sky as seen around dir. blurWidth 1 gives the cosine-weighted average around dir (the irradiance), smaller

@@ -167,7 +167,7 @@ def render(elev, width=512, height=256, view_steps=32, light_steps=8):
     disk = sun_transmittance(elev) * SUN_INTENSITY / (np.pi * SUN_ANGULAR_RADIUS ** 2)
     radiance += cover[:, None] * disk[None, :]
     # night floor (fades in only where the scattered sky is dim anyway)
-    radiance += NIGHT_FLOOR * (SUN_INTENSITY / 3.0) * np.where(hits_planet, 0.3, 1.0)[:, None]
+    radiance += NIGHT_FLOOR * np.where(hits_planet, 0.3, 1.0)[:, None]   # at any sun intensity
     return radiance.reshape(height, width, 3)
 
 

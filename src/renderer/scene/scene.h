@@ -95,6 +95,9 @@ namespace NRE {
         // writeFrameData().
         SkySource skySource = SkySource::Color;
         float frameExposure = 1.0f;
+        // The procedural sky's scattering brightness this frame (sun intensity / 3; 0 without a sun or procedural
+        // sky), set by writeFrameData() (FrameData::skyParams.z).
+        float skyBrightness = 0.0f;
         void addInstance(Handel<Instance> instance);
         void removeInstance(Handel<Instance> instance);
         const std::vector<Handel<Instance>>& getInstances() const { return instances; }

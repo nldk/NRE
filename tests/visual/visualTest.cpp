@@ -996,6 +996,25 @@ NRE_SCENARIO(scene_switch) {
 
 // Landscape with a cubemap sky: shown as authored, whatever the automatic exposure (the sun is low here, so it's
 // about 3).
+// Landscape without setSun (intensity 0): night, not black. The dim blue night sky shows and lights a white box.
+NRE_SCENARIO(landscape_no_sun) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));   // no material: white
+    Image image = renderAndCapture();
+    saveCapture(image, "landscape-no-sun.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 average = imageAverage(image);
+    glm::vec3 box = image.average(kWidth / 2 - 30, kHeight / 2 - 30, kWidth / 2 + 30, kHeight / 2 + 30);
+    std::printf("frame average (%.3f, %.3f, %.3f), luminance %.4f; box (%.3f, %.3f, %.3f), luminance %.4f\n", average.r,
+                average.g, average.b, luminance(average), box.r, box.g, box.b, luminance(box));
+    CHECK(luminance(average) > 3.0f / 255.0f);
+    CHECK(average.b >= average.r);
+    CHECK(luminance(box) > 3.0f / 255.0f);   // lit by the night sky's ambient
+    return true;
+}
+
 NRE_SCENARIO(skybox_landscape) {
     Session session(ApiMode::SceneMode);
     bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
