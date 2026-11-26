@@ -269,6 +269,8 @@ endif()
 # Demo app and benchmark: skipped automatically when another project fetches NRE.
 # ---------------------------------------------------------------------------
 if(PROJECT_IS_TOP_LEVEL)
+    enable_testing()
+    add_subdirectory(tests)
     add_subdirectory(example)
     add_subdirectory(benchmark)
 endif()
