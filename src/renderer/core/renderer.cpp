@@ -605,7 +605,10 @@ namespace NRE {
             if (ErrorHandeling::handleError(error)) return std::unexpected(error);
             return {};
         }
-        c->vulkan.drawQueue.push_back({model, transform.matrix(), true});
+        QueuedDraw& draw = c->vulkan.drawQueue.emplace_back();
+        draw.model = model;
+        draw.matrix = transform.matrix();
+        draw.castsShadows = true;
         return {};
     }
 
@@ -622,7 +625,10 @@ namespace NRE {
         }
         if (!i->visible) return {};
         // Like Scene: instances of a destroyed model draw nothing (endFrame() skips them).
-        c->vulkan.drawQueue.push_back({i->model, i->transform.matrix(), true});
+        QueuedDraw& draw = c->vulkan.drawQueue.emplace_back();
+        draw.model = i->model;
+        draw.matrix = i->transform.matrix();
+        draw.castsShadows = true;
         return {};
     }
 

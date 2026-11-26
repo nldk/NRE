@@ -57,7 +57,10 @@ namespace NRE {
         for (Handel<Instance> handle : instances) {
             Instance* instance = c->manager.get(handle);
             if (!instance || !instance->visible) continue;
-            out.push_back({instance->model, instance->transform.matrix(), true});
+            QueuedDraw& draw = out.emplace_back();
+            draw.model = instance->model;
+            draw.matrix = instance->transform.matrix();
+            draw.castsShadows = true;
         }
     }
 

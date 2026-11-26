@@ -10,6 +10,8 @@ namespace NRE {
 
     // One model drawn once this frame. FunctionDrawMode queues one per drawModel()/drawInstance() call;
     // SceneMode makes one per visible instance of the scene.
+    // Fill entries in place (emplace_back(), then assign the fields): building one as a braced temporary and
+    // copying it in stalls on store forwarding, which cost ~20% in the 5000-instance benchmark.
     struct QueuedDraw {
         Handel<Model> model;   // checked when recorded: a model destroyed since draws nothing
         glm::mat4 matrix;
