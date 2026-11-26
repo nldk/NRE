@@ -49,6 +49,13 @@ namespace NRE {
         }
         return {};
     }
+    BuiltinShader::BuiltinShader(std::span<const uint32_t> code, ShaderType type)
+        : handle(context()->manager.create(Shader(code, type))) {}
+
+    BuiltinShader::~BuiltinShader() {
+        if (auto c = context()) c->manager.destroy(handle, true);
+    }
+
     Result<void> Shader::destroy() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);

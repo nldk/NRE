@@ -15,15 +15,13 @@ namespace NRE {
         static constexpr uint32_t tonemapFrag[] = {
 #include "embeddedShaders/tonemap.frag.inc"
         };
-        Handel<Shader> vertex = c->manager.create(Shader(std::span(fullscreenVert), ShaderType::VERTEX_SHADER));
-        Handel<Shader> fragment = c->manager.create(Shader(std::span(tonemapFrag), ShaderType::FRAGMENT_SHADER));
+        BuiltinShader vertex(fullscreenVert, ShaderType::VERTEX_SHADER);
+        BuiltinShader fragment(tonemapFrag, ShaderType::FRAGMENT_SHADER);
         // No vertex input, no culling, and depth ignored: the output pass has a depth attachment (the unsafe
         // frame callback draws in the same pass), so the pipeline declares one but never tests or writes it.
         Pipeline toneMap;
-        auto err = toneMap.createPipeline(vertex, fragment, {}, VK_COMPARE_OP_ALWAYS, false,
+        auto err = toneMap.createPipeline(vertex.handle, fragment.handle, {}, VK_COMPARE_OP_ALWAYS, false,
                                           c->vulkan.swapchain.image_format);
-        c->manager.destroy(vertex, true);   // the pipeline doesn't need the modules any more
-        c->manager.destroy(fragment, true);
         if (!err) return err;
         if (toneMap.pipeline != VK_NULL_HANDLE) pipeline = c->manager.create(std::move(toneMap));
 

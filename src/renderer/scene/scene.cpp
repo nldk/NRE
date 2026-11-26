@@ -36,11 +36,26 @@ namespace NRE {
         fd.sunDirection = glm::vec4(sunDirection, 0.0f);
         fd.sunColor = glm::vec4(sunColor, sunIntensity);
         Handel<Cubemap> sky = c->manager.get(skybox) ? skybox : Handel<Cubemap>{};
-        // Neutral until the shadow, atmosphere, IBL and haze passes fill them: no cascades, the plain sun colour,
-        // the sky colour as linear light (the same expansion the clear colour gets, without the exposure).
+        // Sun shadows (3D, with a sun): one cascade covering the view from the near plane to the shadow distance.
+        const ShadowMaps& shadows = c->vulkan.shadowMaps;
+        const VkExtent2D extent = sceneExtent(c);
+        shadowCascades = 0;
         for (glm::mat4& m : fd.cascadeViewProj) m = glm::mat4(1.0f);
         fd.cascadeSplits = glm::vec4(0.0f);
-        fd.shadowParams = glm::vec4(0.0f);
+        // No sun (intensity 0), no sun shadows: the shadow pass is skipped.
+        if (c->config.mode == RenderMode::Render_3D && sunIntensity > 0.0f && shadows.ready()
+            && extent.width > 0 && extent.height > 0) {
+            shadowCascades = std::min(LightingMath::cascadeCountFor(shadowDistance), 1u);
+        }
+        if (shadowCascades > 0) {
+            const float aspect = float(extent.width) / float(extent.height);
+            auto corners = LightingMath::frustumSliceCorners(camera.viewMatrix(), Camera::fovY, aspect, Camera::nearPlane, shadowDistance);
+            fd.cascadeViewProj[0] = LightingMath::cascadeViewProj(corners, sunDirection, shadows.resolution());
+            fd.cascadeSplits = glm::vec4(shadowDistance);
+        }
+        fd.shadowParams = glm::vec4(float(shadowCascades), ShadowMaps::normalOffsetTexels, 0.0f, 0.0f);
+        // Neutral until the atmosphere, IBL and haze passes fill them: the plain sun colour, the sky colour as
+        // linear light (the same expansion the clear colour gets, without the exposure).
         fd.sunRadiance = glm::vec4(sunColor * sunIntensity, sunIntensity > 0.0f ? 1.0f : 0.0f);
         fd.skyColor = glm::vec4(LightingMath::inverseToneMapACES(skyColor), 0.0f);
         fd.skyParams = glm::vec4(sky == Handel<Cubemap>{} ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f);
@@ -70,7 +85,7 @@ namespace NRE {
             QueuedDraw& draw = out.emplace_back();
             draw.model = instance->model;
             draw.matrix = instance->transform.matrix();
-            draw.castsShadows = true;
+            draw.castsShadows = instance->castsShadows;
         }
     }
 
@@ -122,6 +137,15 @@ namespace NRE {
         for (VkDescriptorSet set : frameSets) {
             err = writeImageDescriptor(set, 2, defaultCubemap->getView(), c->vulkan.sampler);
             if (!err) return err;
+        }
+        // Binding 3: the sun's shadow maps, shared by every scene. Missing only if init() failed to make them under
+        // RenderErrorPolicy::Ignore; the cascade count then stays 0, so shaders never sample it.
+        const ShadowMaps& shadows = c->vulkan.shadowMaps;
+        if (shadows.arrayView() != VK_NULL_HANDLE) {
+            for (VkDescriptorSet set : frameSets) {
+                err = writeImageDescriptor(set, 3, shadows.arrayView(), shadows.sampler());
+                if (!err) return err;
+            }
         }
         return {};
     }

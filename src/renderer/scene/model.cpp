@@ -20,6 +20,14 @@
 
 namespace NRE {
     namespace {
+        // The material a mesh is drawn with: its own, or the default one when it has none (OBJ), it was destroyed,
+        // or its set couldn't be made (under RenderErrorPolicy::Ignore).
+        Material* meshMaterial(Context* c, const Mesh& mesh, const std::vector<Handel<Material>>& materials) {
+            Material* material = mesh.material < materials.size() ? c->manager.get(materials[mesh.material]) : nullptr;
+            if (!material || material->descriptorSet == VK_NULL_HANDLE) material = c->manager.get(c->vulkan.defaultMaterial);
+            return material;
+        }
+
         Error loadError(const std::string& path, std::string_view reason) {
             return Error{ErrorCode::ModelLoadFailed, "Failed to load model " + path + ": " + std::string(reason)};
         }
@@ -324,13 +332,10 @@ namespace NRE {
         PushConstants pc{modelMatrix,glm::inverseTranspose(modelMatrix)};
         vkCmdPushConstants(commandBuffer, pipeline.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
         0, sizeof(pc), &pc);
-        uint32_t materialCount = materials.size();
         for (auto& mesh : meshes) {
             if (mesh.indexBuffer.buffer == VK_NULL_HANDLE) continue;
 
-            Material* material = mesh.material < materialCount ? c->manager.get(materials[mesh.material]) : nullptr;
-            // No set: creating it failed under RenderErrorPolicy::Ignore.
-            if (!material || material->descriptorSet == VK_NULL_HANDLE) material = c->manager.get(c->vulkan.defaultMaterial);
+            Material* material = meshMaterial(c, mesh, materials);
             vkCmdBindDescriptorSets(commandBuffer,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline.pipelineLayout,1,1,&material->descriptorSet,0,nullptr);   // set 1
             // The pipelines' cull mode is dynamic: double-sided materials show their back faces too. Only set
             // when it changes, so a run of single-sided meshes costs one call.
@@ -346,5 +351,28 @@ namespace NRE {
             vkCmdDrawIndexed(commandBuffer, mesh.indices.size(), 1, 0, 0, 0);
         }
         return {};
+    }
+
+    void Model::drawDepthOnly(VkCommandBuffer commandBuffer, const Pipeline& depthOnly, const Pipeline& alphaMasked,
+                              const glm::mat4& modelMatrix, VkPipeline& boundPipeline) {
+        auto c = context();
+        vkCmdPushConstants(commandBuffer, depthOnly.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(modelMatrix), &modelMatrix);
+        for (auto& mesh : meshes) {
+            if (mesh.indexBuffer.buffer == VK_NULL_HANDLE) continue;
+            Material* material = meshMaterial(c, mesh, materials);
+            // Only cut-outs need the fragment stage (and the material's base colour); the rest is depth only.
+            const Pipeline& pipeline = material->alphaMask ? alphaMasked : depthOnly;
+            if (pipeline.pipeline != boundPipeline) {
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
+                boundPipeline = pipeline.pipeline;
+            }
+            if (material->alphaMask) {
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipelineLayout, 1, 1, &material->descriptorSet, 0, nullptr);
+            }
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);
+            vkCmdBindIndexBuffer(commandBuffer, mesh.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(commandBuffer, mesh.indices.size(), 1, 0, 0, 0);
+        }
     }
 }

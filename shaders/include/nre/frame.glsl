@@ -20,7 +20,7 @@ layout(set = 0, binding = 0) uniform NreFrame {
     vec4 sunColor;                 // 112: rgb: colour, w: intensity (0 = no sun)
     mat4 cascadeViewProj[4];       // 128: world -> shadow clip, per cascade
     vec4 cascadeSplits;            // 384: view-space distance where each cascade ends
-    vec4 shadowParams;             // 400: x: cascade count (0 = no sun shadows), y: normal-offset scale (world units)
+    vec4 shadowParams;             // 400: x: cascade count (0 = no sun shadows), y: normal offset in shadow-map texels
     vec4 sunRadiance;              // 416: rgb: sunlight reaching objects, w: 1 if the sun is up
     vec4 skyColor;                 // 432: rgb: the sky colour as linear light
     vec4 skyParams;                // 448: x: sky source (0 colour, 1 cubemap, 2 procedural), y: specular mips, z: night ambient
@@ -32,5 +32,9 @@ layout(set = 0, binding = 1) readonly buffer NreLightBuffer { NreLight lights[];
 
 // The sky: the scene's skybox cubemap, or a black one when it has none.
 layout(set = 0, binding = 2) uniform samplerCube nreSky;
+
+// The sun's shadow maps: one layer per cascade (nreFrame.shadowParams.x of them), standard depth (0 at the light).
+// A comparison sampler: texture(nreShadowMap, vec4(uv, cascade, depth)) gives 1 where lit. Use nreSunShadow.
+layout(set = 0, binding = 3) uniform sampler2DArrayShadow nreShadowMap;
 
 #endif

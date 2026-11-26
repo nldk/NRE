@@ -22,9 +22,30 @@ namespace NRE {
             if (ErrorHandeling::handleError(error)) return std::unexpected(error);
             return {};
         }
+        return create(vertex->shader, fragment->shader, layout, depthCompare, depthWrite, colorFormat, false, 0.0f, 0.0f);
+    }
+
+    Result<void> Pipeline::createDepthOnlyPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader, const VertexLayout& layout,
+                                                   float depthBiasConstant, float depthBiasSlope) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        auto vertex = c->manager.get(vertexShader);
+        if (!vertex) {
+            auto error = ErrorHandeling::badHandle("vertex shader", vertexShader, "createShader()", std::source_location::current());
+            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
+            return {};
+        }
+        Shader* fragment = c->manager.get(fragmentShader);   // optional
+        return create(vertex->shader, fragment ? fragment->shader : VK_NULL_HANDLE, layout, VK_COMPARE_OP_LESS_OR_EQUAL, true,
+                      VK_FORMAT_UNDEFINED, true, depthBiasConstant, depthBiasSlope);
+    }
+
+    Result<void> Pipeline::create(VkShaderModule vertex, VkShaderModule fragment, const VertexLayout& layout, VkCompareOp depthCompare,
+                                  bool depthWrite, VkFormat colorFormat, bool depthClamp, float depthBiasConstant, float depthBiasSlope) {
+        auto c = context();
         VkPipelineShaderStageCreateInfo stages[2]{};
-        stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr,0, VK_SHADER_STAGE_VERTEX_BIT, vertex->shader, "main"};
-        stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr,0, VK_SHADER_STAGE_FRAGMENT_BIT, fragment->shader, "main"};
+        stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr,0, VK_SHADER_STAGE_VERTEX_BIT, vertex, "main"};
+        stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr,0, VK_SHADER_STAGE_FRAGMENT_BIT, fragment, "main"};
 
         VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
         vi.vertexBindingDescriptionCount = static_cast<uint32_t>(layout.bindings.size());
@@ -45,6 +66,10 @@ namespace NRE {
         rs.cullMode = VK_CULL_MODE_NONE;   // dynamic: set with vkCmdSetCullMode before drawing
         rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rs.lineWidth = 1.0f;
+        rs.depthClampEnable = depthClamp ? VK_TRUE : VK_FALSE;   // needs the depthClamp device feature (enabled in init())
+        rs.depthBiasEnable = depthBiasConstant != 0.0f || depthBiasSlope != 0.0f ? VK_TRUE : VK_FALSE;
+        rs.depthBiasConstantFactor = depthBiasConstant;
+        rs.depthBiasSlopeFactor = depthBiasSlope;
 
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
         ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -53,8 +78,9 @@ namespace NRE {
         cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                              VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
+        const bool hasColor = colorFormat != VK_FORMAT_UNDEFINED;
         VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        cb.attachmentCount = 1;
+        cb.attachmentCount = hasColor ? 1 : 0;
         cb.pAttachments = &cba;
 
         // Cull mode: per mesh, from its material (double-sided ones aren't culled). Core in Vulkan 1.3.
@@ -92,10 +118,9 @@ namespace NRE {
         }
 
         VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-        rci.colorAttachmentCount = 1;
-        rci.pColorAttachmentFormats = &colorFormat;
+        rci.colorAttachmentCount = hasColor ? 1 : 0;
+        rci.pColorAttachmentFormats = hasColor ? &colorFormat : nullptr;
         rci.depthAttachmentFormat = depthFormat;
-
 
         VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         ds.depthTestEnable = VK_TRUE;
@@ -104,7 +129,7 @@ namespace NRE {
 
         VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
         gp.pNext = &rci;
-        gp.stageCount = 2;
+        gp.stageCount = fragment != VK_NULL_HANDLE ? 2 : 1;
         gp.pStages = stages;
         gp.pVertexInputState = &vi;
         gp.pInputAssemblyState = &ia;

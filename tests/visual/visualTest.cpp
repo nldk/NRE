@@ -412,6 +412,185 @@ NRE_SCENARIO(demo_car_lit) {
     return matchesGolden(renderAndCapture(), "car-lit.png");
 }
 
+namespace {
+    // Where a world point lands in the 640x480 capture: the renderer's camera (60 degree vertical field of view)
+    // with the bound scene's view. Vulkan's framebuffer y points down.
+    glm::vec2 toPixel(glm::vec3 world) {
+        glm::mat4 projection = glm::perspective(glm::radians(60.0f), float(kWidth) / float(kHeight), 0.1f, 100.0f);
+        glm::vec4 clip = projection * TRY(getViewMatrix()) * glm::vec4(world, 1.0f);
+        glm::vec2 ndc = glm::vec2(clip) / clip.w;
+        return {(ndc.x * 0.5f + 0.5f) * float(kWidth), (0.5f - ndc.y * 0.5f) * float(kHeight)};
+    }
+
+    // Luminance of the 7x7 pixels around where a world point lands. -1 if that's not inside the image.
+    float spotLuminance(const Image& image, glm::vec3 world) {
+        glm::vec2 p = toPixel(world);
+        if (p.x < 4.0f || p.y < 4.0f || p.x > float(kWidth) - 5.0f || p.y > float(kHeight) - 5.0f) return -1.0f;
+        uint32_t x = uint32_t(p.x), y = uint32_t(p.y);
+        return luminance(image.average(x - 3, y - 3, x + 4, y + 4));
+    }
+
+    // The shadow scenes: a 20 x 20 m ground (Box.glb flattened, its top at y = 0), a 1 m box standing on it at the
+    // origin, the demo sun (it travels toward -x and -z, so the box's shadow falls on its -x side). The camera looks
+    // at that side from the -x side.
+    struct ShadowScene {
+        Handel<Model> box;
+        Transform ground, caster;
+        Handel<Instance> groundInstance, casterInstance;
+    };
+    ShadowScene setUpShadowScene(bool addToScene, glm::vec3 casterPosition = {0.0f, 0.5f, 0.0f}) {
+        ShadowScene s;
+        s.box = TRY(createModel(ASSET_DIR "/Box.glb"));
+        s.ground.position = {0.0f, -0.05f, 0.0f};
+        s.ground.scale = {20.0f, 0.1f, 20.0f};
+        s.caster.position = casterPosition;
+        s.groundInstance = TRY(createInstance(s.box));
+        TRY(setInstanceTransform(s.groundInstance, s.ground));
+        s.casterInstance = TRY(createInstance(s.box));
+        TRY(setInstanceTransform(s.casterInstance, s.caster));
+        if (addToScene) {
+            TRY(addInstanceToScene(s.groundInstance));
+            TRY(addInstanceToScene(s.casterInstance));
+        }
+        setUpSun();
+        TRY(setCameraPosition({-4.0f, 3.0f, 1.0f}));
+        TRY(cameraLookAt({-0.5f, 0.0f, -0.3f}));
+        return s;
+    }
+    // On the ground beside the box, where the box blocks the sun: the sun ray from here passes through it.
+    constexpr glm::vec3 kShadowedSpot{-0.7f, 0.0f, -0.3f};
+    // Open ground about as far from the camera, at a similar angle.
+    constexpr glm::vec3 kLitSpot{-0.7f, 0.0f, 1.2f};
+
+    // The box's shadow is clearly darker than the open ground.
+    bool hasBoxShadow(const Image& image, const char* label) {
+        CHECK(!image.pixels.empty());
+        float shadowed = spotLuminance(image, kShadowedSpot), lit = spotLuminance(image, kLitSpot);
+        std::printf("%s: shadowed spot %.3f, lit spot %.3f\n", label, shadowed, lit);
+        CHECK(shadowed >= 0.0f && lit > 0.0f);
+        CHECK(shadowed < 0.6f * lit);
+        return true;
+    }
+
+    // No shadow: the spot beside the box looks like the open ground.
+    bool hasNoBoxShadow(const Image& image) {
+        CHECK(!image.pixels.empty());
+        float shadowed = spotLuminance(image, kShadowedSpot), lit = spotLuminance(image, kLitSpot);
+        std::printf("shadowed spot %.3f, lit spot %.3f\n", shadowed, lit);
+        CHECK(shadowed >= 0.0f && lit > 0.0f);
+        CHECK(std::abs(shadowed - lit) <= 0.03f * lit);
+        return true;
+    }
+
+    void saveCapture(const Image& image, const std::string& file) {
+        std::filesystem::create_directories(outDir());
+        savePng(image, outDir() + "/" + file);
+    }
+}
+
+// A box on the ground casts the sun's shadow (SceneMode, default shadow distance).
+NRE_SCENARIO(shadow_basic) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpShadowScene(true);
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-basic.png");
+    return hasBoxShadow(image, "scene");
+}
+
+// The same scene in FunctionDrawMode: queued through drawInstance, then through drawModel.
+NRE_SCENARIO(shadow_function_mode) {
+    Session session(ApiMode::FunctionDrawMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    ShadowScene s = setUpShadowScene(false);
+    Image instances = renderAndCapture([&] {
+        TRY(drawInstance(s.groundInstance));
+        TRY(drawInstance(s.casterInstance));
+    });
+    saveCapture(instances, "shadow-function-mode-instance.png");
+    if (!hasBoxShadow(instances, "drawInstance")) return false;
+    Image models = renderAndCapture([&] {
+        TRY(drawModel(s.box, s.ground));
+        TRY(drawModel(s.box, s.caster));
+    });
+    saveCapture(models, "shadow-function-mode-model.png");
+    return hasBoxShadow(models, "drawModel");
+}
+
+// Shadow distance 0 turns sun shadows off. Negative distances are misuse (reported in Debug).
+NRE_SCENARIO(shadow_off) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpShadowScene(true);
+    TRY(setShadowDistance(0.0f));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-off.png");
+#ifndef NDEBUG
+    CHECK(!setShadowDistance(-1.0f));
+#endif
+    return hasNoBoxShadow(image);
+}
+
+// An instance that doesn't cast shadows leaves the ground lit (it's still drawn).
+NRE_SCENARIO(shadow_no_cast) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    ShadowScene s = setUpShadowScene(true);
+    TRY(setCastsShadows(s.casterInstance, false));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-no-cast.png");
+    return hasNoBoxShadow(image);
+}
+
+// The alpha-masked checker quad held flat 2 m above the ground: its shadow has lit holes where the cut-outs are.
+NRE_SCENARIO(shadow_alpha) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto ground = TRY(createInstance(box));
+    TRY(setInstanceTransform(ground, Transform{{0.0f, -0.05f, 0.0f}, glm::identity<glm::quat>(), {20.0f, 0.1f, 20.0f}}));
+    TRY(addInstanceToScene(ground));
+    // Lying flat: local (x, y, 0) goes to (x, 2, -y), so the quad's top row of cells (opaque, hole, ...) is at z = -0.75.
+    auto quad = placeModel(TEST_ASSET_DIR "/alphaQuad.gltf", glm::vec3(0.0f, 2.0f, 0.0f));
+    TRY(rotateInstance(quad, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+    setUpSun();
+    TRY(setCameraPosition({-1.0f, 3.5f, -5.0f}));
+    TRY(cameraLookAt({-1.2f, 0.0f, -1.4f}));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-alpha.png");
+    CHECK(!image.pixels.empty());
+    // The sun moves a point at height 2 by (-0.8, -2, -0.6) on its way to the ground.
+    const glm::vec3 drop{-0.8f, -2.0f, -0.6f};
+    float opaque = spotLuminance(image, glm::vec3(-0.75f, 2.0f, -0.75f) + drop);   // top-left cell
+    float hole = spotLuminance(image, glm::vec3(-0.25f, 2.0f, -0.75f) + drop);     // the cell to its right
+    float lit = spotLuminance(image, {-1.3f, 0.0f, -2.5f});                         // outside the quad's shadow
+    std::printf("opaque cell's spot %.3f, hole's spot %.3f, open ground %.3f\n", opaque, hole, lit);
+    CHECK(opaque >= 0.0f && hole >= 0.0f && lit > 0.0f);
+    CHECK(opaque < 0.6f * lit);
+    CHECK(hole > 0.8f * lit);
+    return true;
+}
+
+// The sun straight down (the light's up vector has to change): the box, lifted 1 m off the ground, shadows the
+// ground right below it.
+NRE_SCENARIO(shadow_noon) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpShadowScene(true, {0.0f, 1.5f, 0.0f});
+    TRY(setSun(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f), 3.0f));
+    TRY(setCameraPosition({-4.0f, 2.5f, 1.0f}));
+    TRY(cameraLookAt({0.0f, 0.0f, 0.0f}));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-noon.png");
+    CHECK(!image.pixels.empty());
+    float below = spotLuminance(image, {0.0f, 0.0f, 0.0f}), lit = spotLuminance(image, {-1.5f, 0.0f, 1.0f});
+    std::printf("below the box %.3f, open ground %.3f\n", below, lit);
+    CHECK(std::isfinite(below) && std::isfinite(lit));
+    CHECK(below >= 0.0f && lit > 0.0f);
+    CHECK(below < 0.6f * lit);
+    return true;
+}
+
 int main(int argc, char** argv) {
     return runScenarios(argc, argv);
 }

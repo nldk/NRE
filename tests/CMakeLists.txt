@@ -29,7 +29,8 @@ if(NRE_UNSAFE_API)
     # One test per scenario name registered with NRE_SCENARIO (underscores become dashes).
     foreach(scenario capture-clear baseline-car baseline-skybox far-object
                      exposure-brighter sky-color function-mode-car skybox-exposure resize-target passthrough-2d
-                     alpha-mask double-sided roughness no-uv-mesh demo-car-lit normal-map metallic-texture)
+                     alpha-mask double-sided roughness no-uv-mesh demo-car-lit normal-map metallic-texture
+                     shadow-basic shadow-function-mode shadow-off shadow-no-cast shadow-alpha shadow-noon)
         add_test(NAME ${scenario} COMMAND nre_visual_test ${scenario})
         set_tests_properties(${scenario} PROPERTIES
             # vk-bootstrap's debug messenger prints "[<severity>: <types>]", e.g. "[ERROR: Validation]" or

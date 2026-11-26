@@ -154,7 +154,7 @@ namespace NRE {
         float height = static_cast<float>(e.height);
         if (c->config.mode == RenderMode::Render_3D) {
             // Reverse-Z with an infinite far plane (depth 1 at the near plane, 0 at infinity); the Vulkan Y flip is included.
-            c->vulkan.projection = LightingMath::reverseZPerspective(glm::radians(60.0f), width / height, 0.1f);
+            c->vulkan.projection = LightingMath::reverseZPerspective(Camera::fovY, width / height, Camera::nearPlane);
         } else {
             c->vulkan.projection = LightingMath::reverseZOrtho(width, height, 1000.0f);
         }
@@ -250,6 +250,8 @@ namespace NRE {
 
         VkPhysicalDeviceFeatures f10{};
         f10.samplerAnisotropy = VK_TRUE;
+        // The shadow pass clamps casters in front of the light's near plane to depth 0 (see LightingMath::cascadeViewProj).
+        f10.depthClamp = VK_TRUE;
 
         VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
         f13.dynamicRendering = VK_TRUE;
@@ -278,7 +280,7 @@ namespace NRE {
                     }
                 }
             }
-            std::string msg = "init(): no GPU supports what the renderer needs (Vulkan 1.3, dynamic rendering, synchronization2, sampler anisotropy): " + phys.error().message();
+            std::string msg = "init(): no GPU supports what the renderer needs (Vulkan 1.3, dynamic rendering, synchronization2, sampler anisotropy, depth clamp): " + phys.error().message();
             if (ErrorHandeling::handleError(Error{ErrorCode::UnsupportedGPU,msg})) {
                 return std::unexpected(Error{ErrorCode::UnsupportedGPU,msg});
             };
@@ -361,12 +363,13 @@ namespace NRE {
         if (!err) return err;
 
         // The order of descriptorLayouts is the set number: 0 = per frame (scene), 1 = material.
-        // Set 0: 0 = FrameData (camera, sun), 1 = lights, 2 = the skybox cubemap.
+        // Set 0: 0 = FrameData (camera, sun), 1 = lights, 2 = the skybox cubemap, 3 = the sun's shadow maps.
         auto frameLayout = DescriptorSetLayout();
         VkDescriptorSetLayoutBinding frameBindings[] = {
             {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         };
         err = frameLayout.createLayout(frameBindings);
         if (!err) return err;
@@ -420,21 +423,22 @@ namespace NRE {
             static constexpr uint32_t skyboxFrag[] = {
 #include "embeddedShaders/skybox.frag.inc"
             };
-            Handel<Shader> vertex = c->manager.create(Shader(std::span(skyboxVert), ShaderType::VERTEX_SHADER));
-            Handel<Shader> fragment = c->manager.create(Shader(std::span(skyboxFrag), ShaderType::FRAGMENT_SHADER));
+            BuiltinShader vertex(skyboxVert, ShaderType::VERTEX_SHADER);
+            BuiltinShader fragment(skyboxFrag, ShaderType::FRAGMENT_SHADER);
             // No vertex input (the vertex shader makes the triangle) and no culling (drawSkybox sets it). The sky sits
             // at depth 0, the cleared value (reverse-Z), so GREATER_OR_EQUAL passes only where nothing was drawn, and
             // it doesn't write depth.
             Pipeline skybox;
-            err = skybox.createPipeline(vertex, fragment, {}, VK_COMPARE_OP_GREATER_OR_EQUAL, false);
-            c->manager.destroy(vertex, true);   // the pipeline doesn't need the modules any more
-            c->manager.destroy(fragment, true);
+            err = skybox.createPipeline(vertex.handle, fragment.handle, {}, VK_COMPARE_OP_GREATER_OR_EQUAL, false);
             if (!err) return err;
             if (skybox.pipeline != VK_NULL_HANDLE) c->vulkan.skyboxPipeline = c->manager.create(std::move(skybox));
         }
         err = c->vulkan.toneMap.create();
         if (!err) return err;
         err = c->vulkan.toneMap.resize(sceneExtent(c));
+        if (!err) return err;
+        // Before any scene: createScene() points every frame set's binding 3 at it.
+        err = c->vulkan.shadowMaps.create();
         if (!err) return err;
 
         // FunctionDrawMode draws with the bound scene's camera and lights, so give it one: the camera
@@ -461,6 +465,7 @@ namespace NRE {
         }
         destroyDepthImage(c);
         c->vulkan.toneMap.destroy();
+        c->vulkan.shadowMaps.destroy();
 #ifdef NRE_UNSAFE_API
         (void)c->unsafeContext.targetColor.destroyImage();
         (void)c->unsafeContext.targetDepth.destroyImage();
@@ -649,7 +654,7 @@ namespace NRE {
         QueuedDraw& draw = c->vulkan.drawQueue.emplace_back();
         draw.model = i->model;
         draw.matrix = i->transform.matrix();
-        draw.castsShadows = true;
+        draw.castsShadows = i->castsShadows;
         return {};
     }
 
@@ -840,6 +845,10 @@ namespace NRE {
         return getInstance(instance).transform([&](Instance* i) { i->visible = visible; });
     }
 
+    Result<void> setCastsShadows(Handel<Instance> instance, bool castsShadows) {
+        return getInstance(instance).transform([&](Instance* i) { i->castsShadows = castsShadows; });
+    }
+
     namespace {
         Result<Scene*> getScene(Handel<Scene> handle, std::source_location location = std::source_location::current()) {
             auto c = context();
@@ -1028,6 +1037,21 @@ namespace NRE {
 
     Result<glm::vec3> getSunDirection() {
         return getBoundScenePtr().transform([](Scene* s) { return s->sunDirection; });
+    }
+
+    Result<void> setShadowDistance(float meters) {
+        auto s = getBoundScenePtr();
+        if (!s) return std::unexpected(s.error());
+#ifndef NDEBUG
+        if (!(meters >= 0.0f)) {   // also catches NaN
+            auto error = Error{ErrorCode::InvalidArgument, "setShadowDistance(): the distance must not be negative, got "
+                               + std::to_string(meters) + ". 0 turns sun shadows off; the default is 20 m."};
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);
+        }
+#endif
+        (*s)->shadowDistance = meters;
+        return {};
     }
 
     Result<void> setExposure(float exposure) {

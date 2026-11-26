@@ -282,13 +282,19 @@ namespace NRE {
     RENDERER_API Result<void> setLightColor(Handel<Light> light, glm::vec3 color, float intensity);
 
     // The sun: one directional light per scene, kept apart from the scene's other lights so it can drive the
-    // sky and (later) shadows. Same direction and intensity conventions as createDirectionalLight.
+    // sky and shadows. Same direction and intensity conventions as createDirectionalLight.
     // A scene starts without one (intensity 0). nreShade lights with it; shaders can also read nreFrame.sunDirection
     // (the way the light travels) and nreFrame.sunColor (rgb colour, w intensity) from nre/frame.glsl.
     RENDERER_API Result<void> setSun(glm::vec3 direction, glm::vec3 color = glm::vec3(1.0f), float intensity = 3.0f);
     // Keeps the color and intensity, e.g. for a day/night cycle.
     RENDERER_API Result<void> setSunDirection(glm::vec3 direction);
     RENDERER_API Result<glm::vec3> getSunDirection();
+    // How far from the camera the bound scene's sun casts shadows, in metres. 0 turns sun shadows off; must not be
+    // negative. Default 20. Shorter distances give sharper shadows. Only the sun casts shadows, and only in Render_3D.
+    RENDERER_API Result<void> setShadowDistance(float meters);
+    // Whether an instance casts sun shadows (it still receives them). Default true; e.g. off for grass, for speed.
+    // drawModel() always casts.
+    RENDERER_API Result<void> setCastsShadows(Handel<Instance> instance, bool castsShadows);
 
     // Tone mapping. Shaders write linear light (values above 1 are fine, and must not tone map themselves);
     // at the end of the frame the renderer multiplies it by the exposure and maps it to the screen with the

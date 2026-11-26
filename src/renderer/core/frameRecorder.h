@@ -20,6 +20,8 @@ namespace NRE {
 
     // Records the whole frame into this frame slot's command buffer (begin to end; doesn't submit). Needs the
     // fence waited on, a swapchain image acquired, scene->writeFrameData() done, and c->vulkan.framePipeline set.
+    //   shadows     the draws with castsShadows into the sun's shadow maps, scene->shadowCascades layers
+    //               (ShadowMaps::record); nothing when that's 0
     //   main pass   into the HDR target (cleared to the scene's sky colour) + the scene's depth: the bound pipeline
     //               and set 0, then each draw, then the skybox
     //   tone map    HDR -> the window, or the unsafe render target (both swapchain format)

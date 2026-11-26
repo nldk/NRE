@@ -60,8 +60,7 @@ namespace NRE {
         VkImageView outView = windowView, depthView = v.depth.view;
         bool toTarget = false;
 #ifdef NRE_UNSAFE_API
-        UnsafeContext& u = c->unsafeContext;
-        if (u.targetColor.getImage() != VK_NULL_HANDLE) {
+        if (const UnsafeContext& u = c->unsafeContext; u.targetColor.getImage() != VK_NULL_HANDLE) {
             outImage = u.targetColor.getImage();
             outView = u.targetColor.getView();
             depthImage = u.targetDepth.getImage();
@@ -74,6 +73,10 @@ namespace NRE {
         // Only missing (or the wrong size) after a failed resize under RenderErrorPolicy::Ignore: the frame is then empty.
         const VkExtent2D hdrExtent = toneMap.hdrExtent();
         const bool haveHdr = toneMap.hdrImage() != VK_NULL_HANDLE && hdrExtent.width == extent.width && hdrExtent.height == extent.height;
+
+        // The sun's shadow maps, from the same draws (writeFrameData() set the cascades). Before the main pass, which
+        // samples them.
+        if (haveHdr && scene) v.shadowMaps.record(cmd, *scene, draws, scene->shadowCascades);
 
         // Last frame's contents aren't needed (both are cleared), so UNDEFINED lets the driver discard them.
         transition(cmd, depthImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -113,7 +116,7 @@ namespace NRE {
             transition(cmd, v.depth.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
             beginRendering(cmd, windowView, v.depth.view, v.swapchain.extent, glm::vec3(0.05f));
         }
-        if (u.frameCallback) u.frameCallback(cmd);
+        if (auto callback = c->unsafeContext.frameCallback) callback(cmd);
 #endif
         vkCmdEndRendering(cmd);
         transition(cmd, windowImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);

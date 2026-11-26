@@ -11,6 +11,7 @@
 #include "gpu/image.h"
 #include "core/frameRecorder.h"
 #include "post/toneMap.h"
+#include "lighting/shadows.h"
 namespace NRE {
     struct Frame {
         VkCommandPool pool;
@@ -63,6 +64,8 @@ namespace NRE {
         Handel<Pipeline> skyboxPipeline;
         // The HDR scene target and the pass that tone maps it to the window / render target.
         ToneMapPass toneMap;
+        // The sun's shadow maps (set 0 binding 3 of every scene), drawn before the main pass.
+        ShadowMaps shadowMaps;
         // What renderFrame() set up the frame with (the bound scene, whose frame data it wrote, and pipeline),
         // so the frame recorded at endFrame() uses them even if others are bound in between.
         Handel<Scene> frameScene;

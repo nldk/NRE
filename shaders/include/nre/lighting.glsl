@@ -175,7 +175,38 @@ vec3 nreSunRadiance() {
 }
 
 float nreSunShadow(vec3 worldPos, vec3 normal) {
-    return 1.0;
+    uint count = uint(nreFrame.shadowParams.x);
+    if (count == 0u) return 1.0;
+    // Distance along the camera's view direction: the clip-space w of its perspective projection.
+    float viewDepth = (nreFrame.viewProj * vec4(worldPos, 1.0)).w;
+    float shadowEnd = nreFrame.cascadeSplits[count - 1u];
+    if (viewDepth >= shadowEnd) return 1.0;
+    uint cascade = 0u;
+    mat4 lightViewProj = nreFrame.cascadeViewProj[cascade];
+
+    // Normal offset: look up a point slightly off the surface, so it doesn't shadow itself (acne). Measured in
+    // texels of this cascade: the orthographic projection scales light-space x by 2 / (the cascade's width).
+    vec2 mapSize = vec2(textureSize(nreShadowMap, 0).xy);
+    float texelWorld = 2.0 / (length(vec3(lightViewProj[0][0], lightViewProj[1][0], lightViewProj[2][0])) * mapSize.x);
+    vec3 p = worldPos + normalize(normal) * (nreFrame.shadowParams.y * texelWorld);
+
+    // Orthographic (w = 1), standard depth (0 at the light) and no Y flip: uv = ndc.xy * 0.5 + 0.5.
+    vec3 ndc = (lightViewProj * vec4(p, 1.0)).xyz;
+    if (ndc.z >= 1.0) return 1.0;   // behind the cascade's far end
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    float depth = max(ndc.z, 0.0);  // sunward of the near plane: casters there were clamped to 0 too
+
+    // 3x3 PCF; each tap is itself a bilinear 2x2 comparison. Outside the map the border is lit.
+    vec2 texel = 1.0 / mapSize;
+    float lit = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            lit += texture(nreShadowMap, vec4(uv + vec2(x, y) * texel, float(cascade), depth));
+        }
+    }
+    lit /= 9.0;
+    // Fades out over the last 10% of the shadow distance instead of ending at a line.
+    return mix(lit, 1.0, smoothstep(0.9 * shadowEnd, shadowEnd, viewDepth));
 }
 
 vec3 nreSunLight(Surface s) {

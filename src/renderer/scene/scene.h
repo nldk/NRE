@@ -12,6 +12,9 @@ namespace NRE {
     struct Camera {
         static constexpr glm::vec3 worldUp{0.0f, 1.0f, 0.0f};
         static constexpr float maxPitch = 1.5533430f;
+        // The renderer's perspective (Render_3D): vertical field of view (60 degrees) and near plane, in metres.
+        static constexpr float fovY = 1.0471976f;
+        static constexpr float nearPlane = 0.1f;
 
         glm::vec3 position{0.0f, 0.0f, 3.0f};
         float yaw = 0.0f;     // radians, positive turns right
@@ -64,6 +67,11 @@ namespace NRE {
         float exposure = 1.0f;
         // setSkyColor: the background where nothing is drawn, as a display colour (looks the same at any exposure).
         glm::vec3 skyColor = defaultSkyColor;
+        // setShadowDistance: how far from the camera the sun casts shadows, in metres. 0 = no sun shadows. Never negative.
+        float shadowDistance = 20.0f;
+        // Sun shadow cascades this frame (0 = none), set by writeFrameData() with their matrices; the shadow pass draws
+        // this many.
+        uint32_t shadowCascades = 0;
         void addInstance(Handel<Instance> instance);
         void removeInstance(Handel<Instance> instance);
         const std::vector<Handel<Instance>>& getInstances() const { return instances; }
@@ -71,8 +79,8 @@ namespace NRE {
         void addLight(Handel<Light> light);
         void removeLight(Handel<Light> light);
         const std::vector<Handel<Light>>& getLights() const { return lights; }
-        // Writes this frame's camera + lights (and points set 0 at the skybox). Only once this frame's fence has
-        // been waited on: the GPU may still be reading the previous contents until then.
+        // Writes this frame's camera, lights and sun shadow cascades (and points set 0 at the skybox). Only once this
+        // frame's fence has been waited on: the GPU may still be reading the previous contents until then.
         Result<void> writeFrameData();
         // Binds pipeline and this frame's set 0 (written by writeFrameData()).
         void bindFrameData(VkCommandBuffer commandBuffer, const Pipeline& pipeline);

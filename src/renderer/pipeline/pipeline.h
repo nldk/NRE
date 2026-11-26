@@ -35,6 +35,11 @@ namespace NRE {
         };
         Result<void> createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader, const VertexLayout& layout,
                                     VkCompareOp depthCompare, bool depthWrite, VkFormat colorFormat = hdrFormat);
+        // Depth only (no colour attachment), for shadow maps: standard depth (cleared to 1, LESS_OR_EQUAL), depth
+        // clamping (geometry in front of the near plane writes depth 0 instead of being clipped) and a depth bias.
+        // fragmentShader may be empty: the pipeline then has only the vertex stage.
+        Result<void> createDepthOnlyPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader, const VertexLayout& layout,
+                                             float depthBiasConstant, float depthBiasSlope);
         Pipeline(const Pipeline&) = delete;
         Pipeline& operator=(const Pipeline&) = delete;
         Pipeline(Pipeline&& o) noexcept
@@ -48,6 +53,10 @@ namespace NRE {
             return *this;
         }
         ~Pipeline();
+    private:
+        // Both of the above. colorFormat VK_FORMAT_UNDEFINED: no colour attachment. fragment may be VK_NULL_HANDLE.
+        Result<void> create(VkShaderModule vertex, VkShaderModule fragment, const VertexLayout& layout, VkCompareOp depthCompare,
+                            bool depthWrite, VkFormat colorFormat, bool depthClamp, float depthBiasConstant, float depthBiasSlope);
     };
 
 }
