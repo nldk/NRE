@@ -134,6 +134,25 @@ static void autoExposureShape() {
     CHECK_NEAR(n10, n45, 1e-5);
 }
 
+static void sunFadesSmoothly() {
+    auto T = [](float deg) { return sunTransmittance(glm::radians(deg)); };
+    glm::vec3 at0 = T(0.0f);
+    CHECK(at0.x > 0.0f);
+    glm::vec3 prev = T(2.0f);
+    for (int i = 1; i <= 80; ++i) {
+        float deg = 2.0f - 0.05f * float(i);
+        glm::vec3 t = T(deg);
+        CHECK(std::isfinite(t.x) && std::isfinite(t.y) && std::isfinite(t.z));
+        CHECK(t.x <= prev.x + 1e-7f && t.y <= prev.y + 1e-7f && t.z <= prev.z + 1e-7f);
+        CHECK(prev.x - t.x <= 0.1f * at0.x); // red carries the light here; g/b fall steeply by physics above 0 deg
+        prev = t;
+    }
+    glm::vec3 low = T(-1.0f);
+    CHECK(low.x == 0.0f && low.y == 0.0f && low.z == 0.0f);
+    glm::vec3 deep = T(-30.0f);
+    CHECK(deep.x == 0.0f && deep.z == 0.0f);
+}
+
 static void hazeVisibility() {
     CHECK_NEAR(std::exp(-hazeDensityForVisibility(8000.0f) * 8000.0f), 0.05, 1e-4);
     CHECK(hazeDensityForVisibility(0.0f) == 0.0f);
@@ -151,6 +170,7 @@ int main() {
     transmittanceZenithBrighter();
     sunsetRed();
     autoExposureShape();
+    sunFadesSmoothly();
     hazeVisibility();
     return g_failed ? 1 : 0;
 }

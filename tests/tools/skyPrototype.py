@@ -29,6 +29,9 @@ SKY_SCALE = 10.0                   # multiplies single-scatter radiance (stand-i
 NIGHT_FLOOR = np.array([0.0025, 0.0045, 0.0100])   # linear radiance of the night sky at intensity 3
 GROUND_ALBEDO = 0.2
 SUN_INTENSITY = 3.0               # setSun intensity: 3 is the standard look
+# Sun light fade at the horizon (SUN_FADE_*_DEG match Atmosphere::sunFade*Deg)
+SUN_FADE_LOW_DEG = -0.95
+SUN_FADE_HIGH_DEG = 0.0
 # autoExposure(elevation): 1 at >= 30 deg, exp(ln(MAX) * smoothstep) down to -10 deg and below
 EXPOSURE_MAX = 5.0
 EXPOSURE_HIGH_DEG = 30.0
@@ -92,10 +95,14 @@ def optical_depth(py, dy, n=TRANSMITTANCE_STEPS):
 
 
 def sun_transmittance(elev):
-    """RGB transmittance of the sun's light reaching the viewer; 0 when the planet blocks the sun."""
+    """RGB transmittance of the sun's light reaching the viewer (same as LightingMath::sunTransmittance): optical
+    depth at max(elevation, 0), times a smoothstep fade from 0 at SUN_FADE_LOW_DEG to 1 at SUN_FADE_HIGH_DEG."""
     py = PLANET_RADIUS + VIEWER_HEIGHT
-    depth, blocked = optical_depth(np.array(py), np.array(np.sin(elev)))
-    return np.where(blocked, 0.0, np.exp(-depth))
+    fade = float(smoothstep(SUN_FADE_LOW_DEG, SUN_FADE_HIGH_DEG, np.degrees(elev)))
+    if fade <= 0.0:
+        return np.zeros(3)
+    depth, _ = optical_depth(np.array(py), np.array(np.sin(max(elev, 0.0))))
+    return fade * np.exp(-depth)
 
 
 def render(elev, width=512, height=256, view_steps=32, light_steps=8):
@@ -174,9 +181,9 @@ def srgb(x):
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "sheet.png"
-    elevations = [60, 30, 15, 5, 2, 0, -4, -10, -20]
+    elevations = [60, 30, 15, 5, 2, 0, -0.5, -4, -10, -20]
     w, h = 512, 256
-    cols = 3
+    cols = 4
     rows = (len(elevations) + cols - 1) // cols
     sheet = Image.new("RGB", (cols * w, rows * (h + 22)), (20, 20, 20))
     dr = ImageDraw.Draw(sheet)
@@ -188,14 +195,14 @@ def main():
         x, y = (k % cols) * w, (k // cols) * (h + 22)
         sheet.paste(Image.fromarray(img), (x, y + 22))
         t = sun_transmittance(e)
-        dr.text((x + 4, y + 4), f"elev {deg:+d} deg  exposure {exp:.2f}  T=({t[0]:.3f},{t[1]:.3f},{t[2]:.3f})", fill=(255, 255, 255))
+        dr.text((x + 4, y + 4), f"elev {deg:+g} deg  exposure {exp:.2f}  T=({t[0]:.3f},{t[1]:.3f},{t[2]:.3f})", fill=(255, 255, 255))
         top = rad[:h // 8].mean(axis=(0, 1))
         hor = rad[h // 2 - 4:h // 2].mean(axis=(0, 1))
-        print(f"{deg:+4d}  exp {exp:7.3f}  zenith {np.round(top,4)}  horizon {np.round(hor,4)}")
+        print(f"{deg:+5g}  exp {exp:7.3f}  zenith {np.round(top,4)}  horizon {np.round(hor,4)}")
     sheet.save(out)
     print("wrote", out)
     print("sun transmittance check:")
-    for deg in (90, 60, 30, 10, 2, 0.5, 0, -5):
+    for deg in (90, 60, 30, 10, 2, 0.5, 0, -0.25, -0.5, -0.95, -5):
         print(deg, np.round(sun_transmittance(np.radians(deg)), 6))
     print("autoExposure table:")
     for deg in (90, 45, 30, 25, 20, 15, 10, 5, 0, -5, -10, -45):

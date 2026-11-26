@@ -38,8 +38,14 @@ Samples where the sample-to-sun ray hits the planet get zero sun light.
 - Disk radiance = `intensity * sunTransmittance(elevation) / solidAngle`, about 43800 * T at intensity 3, i.e. it
   saturates through ACES; no limb darkening, no bloom. Sky pass should coverage-blend the disk edge over one pixel.
 - Object lighting radiance = `sunColor * intensity * sunTransmittance(elevation)` (Landscape), as in the plan.
-- `sunTransmittance` is exactly 0 once the sun is below the geometric horizon of a 1.5 m viewer (about -0.0012 degrees,
-  where the sun ray hits the planet). The step is not smoothed (the red channel is already down to 0.07 at 0 degrees).
+- Horizon fade (single definition: `LightingMath::sunTransmittance`, constants `Atmosphere::sunFadeLowDeg = -0.95`,
+  `sunFadeHighDeg = 0.0`): the optical depth is evaluated at max(elevation, 0) (never NaN/inf) and multiplied by
+  `smoothstep(-0.95deg, 0deg, elevation)`, so the sun's light is full strength with the disk centre on the horizon,
+  fades smoothly, and is exactly 0 from -0.95 degrees down. Task 8 uses `sunTransmittance` as is, with no separate
+  fade factor (sun light, sun disk and shadow-off threshold all follow it). The sky's own scattering is not faded
+  (the sky glow persists below the horizon, as in the -4 degree panel). Chosen over the suggested -0.6..+0.6 range
+  because the physical transmittance already falls ~8% per 0.05 degree near 0 degrees; a fade centred there would
+  break the "no step above 10%" test (`sunFadesSmoothly`, checked on the red channel; green/blue fall steeply by physics).
 
 Cross-check values (identical in Python and `lightingMath.h`):
 | elevation | T (r, g, b) |
@@ -51,7 +57,9 @@ Cross-check values (identical in Python and `lightingMath.h`):
 | 2 | 0.293224, 0.075599, 0.005459 (r/b = 53.7) |
 | 0.5 | 0.126757, 0.016571, 0.000230 |
 | 0 | 0.069089, 0.006220, 0.000034 |
-| -5 | 0, 0, 0 |
+| -0.25 | 0.057253, 0.005154, 0.000028 |
+| -0.5 | 0.031820, 0.002865, 0.000016 |
+| -0.95 and below | 0, 0, 0 |
 
 ## Auto exposure
 `t = smoothstep(30deg, -10deg, elevation)` (clamped), `autoExposure = exp(ln(5) * t) = 5^t`.

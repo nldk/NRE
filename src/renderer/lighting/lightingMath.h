@@ -146,6 +146,10 @@ inline constexpr double ozoneHalfWidth = 15.0;
 inline constexpr int transmittanceSteps = 64;  // midpoint rule with quadratic spacing t = tMax * u^2
 inline constexpr double skyScale = 10.0;       // single-scatter radiance gain (stands in for multiple scattering)
 inline constexpr double sunAngularRadius = 0.0046690; // 0.2675 deg in radians
+// The sun's light fades out as the disk sinks: factor 0 at sunFadeLowDeg and below, 1 at sunFadeHighDeg and above
+// (smoothstep). Wide enough (about two disk diameters) that a running sunset never pops; full strength at the horizon.
+inline constexpr double sunFadeLowDeg = -0.95;
+inline constexpr double sunFadeHighDeg = 0.0;
 inline constexpr double nightFloor[3] = {0.0025, 0.0045, 0.0100}; // linear sky radiance at sun intensity 3
 // Auto exposure: 1 at >= exposureHighDeg, exp(ln(exposureMax) * smoothstep) down to exposureLowDeg and below.
 inline constexpr double exposureMax = 5.0;
@@ -154,15 +158,20 @@ inline constexpr double exposureLowDeg = -10.0;
 } // namespace Atmosphere
 
 // RGB transmittance of the sun's light reaching a viewer 1.5 m above an Earth-sized planet (Rayleigh + Mie +
-// ozone). `sunElevation` is radians above the horizon. Zero once the planet blocks the sun.
+// ozone). `sunElevation` is radians above the horizon. The optical depth is evaluated at max(elevation, 0) (never
+// NaN/inf) and multiplied by the single smooth horizon fade below, so the result reaches exactly 0 from -0.95 degrees down.
 inline glm::vec3 sunTransmittance(float sunElevation) {
     namespace A = Atmosphere;
     const double py = A::planetRadius + A::viewerHeight;
-    const double dy = std::sin(double(sunElevation));
+    const double elevDeg = double(sunElevation) * 180.0 / 3.14159265358979323846;
+    double fade = std::clamp((elevDeg - A::sunFadeLowDeg) / (A::sunFadeHighDeg - A::sunFadeLowDeg), 0.0, 1.0);
+    fade = fade * fade * (3.0 - 2.0 * fade);
+    if (fade <= 0.0) return glm::vec3(0.0f);
+    const double dy = std::sin(std::max(double(sunElevation), 0.0));
     const double b = py * dy;
     const double c = py * py;
     const double planetDisc = b * b - (c - A::planetRadius * A::planetRadius);
-    if (planetDisc >= 0.0 && -b - std::sqrt(planetDisc) > 0.0) return glm::vec3(0.0f);
+    (void)planetDisc; // dy >= 0, so the sun ray never meets the planet
     const double tTop = -b + std::sqrt(b * b - (c - A::topRadius * A::topRadius));
     const double horizontal = std::sqrt(std::max(1.0 - dy * dy, 0.0));
     double depth[3] = {0, 0, 0};
@@ -178,7 +187,7 @@ inline glm::vec3 sunTransmittance(float sunElevation) {
         for (int k = 0; k < 3; ++k)
             depth[k] += (r * A::rayleighScatter[k] + m * (A::mieScatter + A::mieAbsorb) + o * A::ozoneAbsorb[k]) * dt;
     }
-    return {float(std::exp(-depth[0])), float(std::exp(-depth[1])), float(std::exp(-depth[2]))};
+    return {float(fade * std::exp(-depth[0])), float(fade * std::exp(-depth[1])), float(fade * std::exp(-depth[2]))};
 }
 
 // Brightness compensation driven by the sun's elevation (radians): 1 from 30 degrees up, rising smoothly toward
