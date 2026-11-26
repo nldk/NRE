@@ -1,0 +1,36 @@
+// nre/frame.glsl: NRE's per-frame data, descriptor set 0. Enough for vertex shaders; nre/lighting.glsl includes
+// it for fragment shaders. nre_compile_shaders() puts NRE's shader include folder on the include path, so
+//     #include "nre/frame.glsl"
+// works in any shader it compiles. The push constants (mat4 model, mat4 normalMatrix) stay in your vertex shader.
+#ifndef NRE_FRAME_GLSL
+#define NRE_FRAME_GLSL
+
+// Must match GpuLight in src/renderer/gpu/UBOAndSSBO.h.
+struct NreLight {
+    vec4 position;   // w = 0: directional, xyz = the way the light travels. w = 1: point light, xyz = position
+    vec4 color;      // rgb = colour, w = intensity
+};
+
+// Must match FrameData in src/renderer/gpu/UBOAndSSBO.h (std140; the offsets are in the comments).
+layout(set = 0, binding = 0) uniform NreFrame {
+    mat4 viewProj;                 // 0: world -> clip (reverse-Z, infinite far plane)
+    vec4 cameraPos;                // 64: xyz world position
+    uint lightCount;               // 80: entries in nreLightBuffer
+    vec4 sunDirection;             // 96: xyz: the way the sunlight travels (normalized)
+    vec4 sunColor;                 // 112: rgb: colour, w: intensity (0 = no sun)
+    mat4 cascadeViewProj[4];       // 128: world -> shadow clip, per cascade
+    vec4 cascadeSplits;            // 384: view-space distance where each cascade ends
+    vec4 shadowParams;             // 400: x: cascade count (0 = no sun shadows), y: normal-offset scale (world units)
+    vec4 sunRadiance;              // 416: rgb: sunlight reaching objects, w: 1 if the sun is up
+    vec4 skyColor;                 // 432: rgb: the sky colour as linear light
+    vec4 skyParams;                // 448: x: sky source (0 colour, 1 cubemap, 2 procedural), y: specular mips, z: night ambient
+    vec4 hazeParams;               // 464: x: density per metre (0 = off), y: 1 / haze height
+} nreFrame;
+
+// The scene's point and directional lights: nreFrame.lightCount of them.
+layout(set = 0, binding = 1) readonly buffer NreLightBuffer { NreLight lights[]; } nreLightBuffer;
+
+// The sky: the scene's skybox cubemap, or a black one when it has none.
+layout(set = 0, binding = 2) uniform samplerCube nreSky;
+
+#endif

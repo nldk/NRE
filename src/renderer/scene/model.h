@@ -46,7 +46,12 @@ namespace NRE {
 
         Model() = default;
 
-        Result<void> draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix);
+        // Pushes the matrices, then per mesh binds its material (set 1) and sets the cull mode (none for
+        // double-sided materials, back faces otherwise) before drawing it. Set 0 must already be bound.
+        // cullMode: the cull mode the command buffer has now. The cull mode is only set where it differs, and
+        // cullMode is updated. Start a pass (or a newly bound pipeline) with unknownCullMode.
+        static constexpr VkCullModeFlags unknownCullMode = VK_CULL_MODE_FLAG_BITS_MAX_ENUM;
+        Result<void> draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix, VkCullModeFlags& cullMode);
         [[nodiscard]] std::vector<Handel<Material>> getMaterials() const{ return materials; };
         Model(const Model&) = delete;
         Model& operator=(const Model&) = delete;

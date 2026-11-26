@@ -24,17 +24,17 @@ namespace NRE {
         VkPipeline       pipeline = VK_NULL_HANDLE;
         // Empty: call createPipeline() to make it, to get its Result.
         Pipeline() = default;
-        // The defaults are for scene geometry. The skybox uses no culling and depthCompare GREATER_OR_EQUAL without
-        // depthWrite, so it only fills the pixels still at the cleared far plane. Depth is reverse-Z (cleared to 0, nearer is greater).
+        // The defaults are for scene geometry. The skybox uses depthCompare GREATER_OR_EQUAL without depthWrite, so
+        // it only fills the pixels still at the cleared far plane. Depth is reverse-Z (cleared to 0, nearer is greater).
         // colorFormat: the HDR scene target by default; the tone-map pass draws in the swapchain format.
+        // The cull mode is dynamic state: whoever draws sets it with vkCmdSetCullMode first (Model::draw per mesh,
+        // from the material's doubleSided; the built-in passes VK_CULL_MODE_NONE after binding their pipeline).
         Pipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader, const VertexLayout& layout = {},
-                 VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT, VkCompareOp depthCompare = VK_COMPARE_OP_GREATER,
-                 bool depthWrite = true, VkFormat colorFormat = hdrFormat) {
-            createPipeline(vertexShader, fragmentShader, layout, cullMode, depthCompare, depthWrite, colorFormat);
+                 VkCompareOp depthCompare = VK_COMPARE_OP_GREATER, bool depthWrite = true, VkFormat colorFormat = hdrFormat) {
+            createPipeline(vertexShader, fragmentShader, layout, depthCompare, depthWrite, colorFormat);
         };
         Result<void> createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader, const VertexLayout& layout,
-                                    VkCullModeFlags cullMode, VkCompareOp depthCompare, bool depthWrite,
-                                    VkFormat colorFormat = hdrFormat);
+                                    VkCompareOp depthCompare, bool depthWrite, VkFormat colorFormat = hdrFormat);
         Pipeline(const Pipeline&) = delete;
         Pipeline& operator=(const Pipeline&) = delete;
         Pipeline(Pipeline&& o) noexcept

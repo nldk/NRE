@@ -24,26 +24,27 @@ namespace NRE {
             return Error{ErrorCode::ModelLoadFailed, "Failed to load model " + path + ": " + std::string(reason)};
         }
 
-        // Loads glTF image imageIndex into the resource manager. Returns an empty handle (= use the default texture)
-        // if it can't be loaded; loadTexture / loadTextureFromMemory have already reported why.
-        Handel<Texture> loadGltfImage(const fastgltf::Asset& asset, std::size_t imageIndex, const std::filesystem::path& dir) {
+        // Loads glTF image imageIndex into the resource manager, as sRGB (colour) or linear (data) texels. Returns an
+        // empty handle if it can't be loaded; loadTexture / loadTextureFromMemory have already reported why.
+        Handel<Texture> loadGltfImage(const fastgltf::Asset& asset, std::size_t imageIndex, const std::filesystem::path& dir,
+                                      bool srgb) {
             Texture texture;
             auto loaded = std::visit(fastgltf::visitor{
                 // A separate file next to the .gltf.
                 [&](const fastgltf::sources::URI& file) -> Result<void> {
                     // A non-zero offset means the image is packed inside a bigger file, which loadTexture can't read.
                     if (file.fileByteOffset != 0 || !file.uri.isLocalPath()) return {};
-                    return texture.loadTexture((dir / file.uri.fspath()).string());
+                    return texture.loadTexture((dir / file.uri.fspath()).string(), srgb);
                 },
                 // Embedded in a buffer: the binary chunk of a .glb.
                 [&](const fastgltf::sources::BufferView& view) -> Result<void> {
                     auto bytes = fastgltf::DefaultBufferDataAdapter{}(asset, view.bufferViewIndex);
-                    return texture.loadTextureFromMemory(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size());
+                    return texture.loadTextureFromMemory(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size(), srgb);
                 },
                 // A base64 data URI in a .gltf, already decoded by fastgltf.
                 [&](const fastgltf::sources::Array& array) -> Result<void> {
                     return texture.loadTextureFromMemory(reinterpret_cast<const unsigned char*>(array.bytes.data()),
-                                                         array.bytes.size_bytes());
+                                                         array.bytes.size_bytes(), srgb);
                 },
                 [](const auto&) -> Result<void> { return {}; },
             }, asset.images[imageIndex].data);
@@ -120,26 +121,43 @@ namespace NRE {
 
             Model model;
             // Same order as asset->materials, so a primitive's materialIndex indexes model.materials directly.
-            // Several materials can use the same image, so each image is loaded at most once.
-            std::vector<std::optional<Handel<Texture>>> imageTextures(asset->images.size());
+            // Several materials can use the same image, so each image is loaded at most once per colour space:
+            // [0] linear (metallic-roughness, normal maps), [1] sRGB (base colour).
+            std::vector<std::optional<Handel<Texture>>> imageTextures[2];
+            imageTextures[0].resize(asset->images.size());
+            imageTextures[1].resize(asset->images.size());
             std::filesystem::path dir = std::filesystem::path(path).parent_path();
+            // The texture a material slot points at. Empty (= the material's default) when there's none or it
+            // failed to load. Only TEXCOORD_0 is read, so every texture uses it.
+            auto textureFor = [&](const fastgltf::TextureInfo& info, bool srgb) -> Handel<Texture> {
+                const auto& imageIndex = asset->textures[info.textureIndex].imageIndex;
+                if (!imageIndex.has_value()) return {};
+                auto& cached = imageTextures[srgb][*imageIndex];
+                if (!cached) cached = loadGltfImage(asset.get(), *imageIndex, dir, srgb);
+                return *cached;
+            };
             for (auto& gltfMaterial : asset->materials) {
-                Handel<Texture> base{};   // empty: createMaterial uses the default texture
-                if (const auto& info = gltfMaterial.pbrData.baseColorTexture; info.has_value()) {
-                    if (const auto& imageIndex = asset->textures[info->textureIndex].imageIndex; imageIndex.has_value()) {
-                        auto& cached = imageTextures[*imageIndex];
-                        if (!cached) cached = loadGltfImage(asset.get(), *imageIndex, dir);
-                        base = *cached;
-                    }
+                Material material;
+                const auto& pbr = gltfMaterial.pbrData;
+                if (pbr.baseColorTexture.has_value()) {
+                    material.baseTexture = textureFor(*pbr.baseColorTexture, true);
+                    // A base colour image that didn't load shows the checker, so it stands out.
+                    if (material.baseTexture == Handel<Texture>{}) material.baseTexture = c->vulkan.defaultTexture;
                 }
-                auto material = createMaterial(base);
-                if (!material) return std::unexpected(material.error());
-                // Not used by the shader yet: stored so it's there once base color factors are.
-                if (Material* m = c->manager.get(*material)) {
-                    const auto& f = gltfMaterial.pbrData.baseColorFactor;
-                    m->baseColor = {f[0], f[1], f[2], f[3]};
+                if (pbr.metallicRoughnessTexture.has_value()) material.metallicTexture = textureFor(*pbr.metallicRoughnessTexture, false);
+                if (gltfMaterial.normalTexture.has_value()) {
+                    material.normalTexture = textureFor(*gltfMaterial.normalTexture, false);
+                    material.normalScale = gltfMaterial.normalTexture->scale;
                 }
-                model.materials.push_back(*material);
+                material.baseColor = {pbr.baseColorFactor[0], pbr.baseColorFactor[1], pbr.baseColorFactor[2], pbr.baseColorFactor[3]};
+                material.metallic = pbr.metallicFactor;
+                material.roughness = pbr.roughnessFactor;
+                // BLEND isn't supported (nothing is sorted or blended), so it draws as opaque.
+                material.alphaMask = gltfMaterial.alphaMode == fastgltf::AlphaMode::Mask;
+                material.alphaCutoff = gltfMaterial.alphaCutoff;
+                material.doubleSided = gltfMaterial.doubleSided;
+                if (auto r = material.createDescriptorSet(); !r) return std::unexpected(r.error());
+                model.materials.push_back(c->manager.create(std::move(material)));
             }
 
             // Adds every primitive of glTF mesh meshIndex to the model, with transform baked into its vertices.
@@ -300,7 +318,7 @@ namespace NRE {
             (void)mesh.indexBuffer.destroyBuffer();
         }
     }
-    Result<void> Model::draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix) {
+    Result<void> Model::draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix, VkCullModeFlags& cullMode) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         PushConstants pc{modelMatrix,glm::inverseTranspose(modelMatrix)};
@@ -311,8 +329,16 @@ namespace NRE {
             if (mesh.indexBuffer.buffer == VK_NULL_HANDLE) continue;
 
             Material* material = mesh.material < materialCount ? c->manager.get(materials[mesh.material]) : nullptr;
-            if (!material) material =  c->manager.get(c->vulkan.defaultMaterial);
+            // No set: creating it failed under RenderErrorPolicy::Ignore.
+            if (!material || material->descriptorSet == VK_NULL_HANDLE) material = c->manager.get(c->vulkan.defaultMaterial);
             vkCmdBindDescriptorSets(commandBuffer,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline.pipelineLayout,1,1,&material->descriptorSet,0,nullptr);   // set 1
+            // The pipelines' cull mode is dynamic: double-sided materials show their back faces too. Only set
+            // when it changes, so a run of single-sided meshes costs one call.
+            VkCullModeFlags meshCull = material->doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+            if (meshCull != cullMode) {
+                vkCmdSetCullMode(commandBuffer, meshCull);
+                cullMode = meshCull;
+            }
 
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);

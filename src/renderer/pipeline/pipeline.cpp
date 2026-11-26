@@ -1,12 +1,13 @@
 #include "pipeline/pipeline.h"
 
+#include <iterator>
+
 #include "core/context.h"
 #include "core/errorHandling.h"
 
 namespace NRE {
     Result<void> Pipeline::createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader, const VertexLayout& layout,
-                                          VkCullModeFlags cullMode, VkCompareOp depthCompare, bool depthWrite,
-                                          VkFormat colorFormat) {
+                                          VkCompareOp depthCompare, bool depthWrite, VkFormat colorFormat) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         auto vertex = c->manager.get(vertexShader);
@@ -41,7 +42,7 @@ namespace NRE {
         VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
         rs.polygonMode = VK_POLYGON_MODE_FILL;
 
-        rs.cullMode = cullMode;
+        rs.cullMode = VK_CULL_MODE_NONE;   // dynamic: set with vkCmdSetCullMode before drawing
         rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rs.lineWidth = 1.0f;
 
@@ -56,9 +57,10 @@ namespace NRE {
         cb.attachmentCount = 1;
         cb.pAttachments = &cba;
 
-        VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        // Cull mode: per mesh, from its material (double-sided ones aren't culled). Core in Vulkan 1.3.
+        VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE};
         VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-        dyn.dynamicStateCount = 2;
+        dyn.dynamicStateCount = uint32_t(std::size(dynStates));
         dyn.pDynamicStates = dynStates;
 
         VkPushConstantRange pcr{};

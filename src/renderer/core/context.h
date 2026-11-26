@@ -51,7 +51,12 @@ namespace NRE {
         VkSampler sampler = VK_NULL_HANDLE;
         DescriptorSetPool   descriptorPool;
         std::vector<DescriptorSetLayout> descriptorLayouts;
+        // The magenta/black checker: shown where a model's base colour image failed to load.
         Handel<Texture> defaultTexture;
+        // 1x1 material defaults: white (base colour, metallic-roughness) and a flat normal (128, 128, 255).
+        Handel<Texture> whiteTexture;
+        Handel<Texture> flatNormalTexture;
+        // For meshes without a material (OBJ): white, non-metal, roughness 1.
         Handel<Material> defaultMaterial;
         // 1x1 black faces: what set 0 binding 2 shows while a scene has no skybox.
         Handel<Cubemap> defaultCubemap;

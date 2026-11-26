@@ -45,7 +45,7 @@ NRE_FUNCTION(Result<Handel<Scene>>, getBoundScene, (), ())
 NRE_FUNCTION(Result<void>, addInstanceToScene, (Handel<Instance> instance), (instance))
 NRE_FUNCTION(Result<void>, removeInstanceFromScene, (Handel<Instance> instance), (instance))
 
-NRE_FUNCTION(Result<Handel<Texture>>, createTexture, (std::string path), (std::move(path)))
+NRE_FUNCTION(Result<Handel<Texture>>, createTexture, (std::string path, bool srgb), (std::move(path), srgb))
 NRE_FUNCTION(Result<void>, destroyTexture, (Handel<Texture> texture), (texture))
 NRE_FUNCTION(Result<Handel<Material>>, createMaterial, (Handel<Texture> baseTexture, Handel<Texture> metallicTexture, Handel<Texture> normalTexture), (baseTexture, metallicTexture, normalTexture))
 NRE_FUNCTION(Result<void>, destroyMaterial, (Handel<Material> material), (material))

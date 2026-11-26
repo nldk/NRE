@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "core/context.h"
+#include "lighting/lightingMath.h"
 
 namespace NRE {
     void Scene::addInstance(Handel<Instance> instance) {
@@ -34,10 +35,19 @@ namespace NRE {
         fd.lightCount = uint32_t(gpuLights.size());
         fd.sunDirection = glm::vec4(sunDirection, 0.0f);
         fd.sunColor = glm::vec4(sunColor, sunIntensity);
+        Handel<Cubemap> sky = c->manager.get(skybox) ? skybox : Handel<Cubemap>{};
+        // Neutral until the shadow, atmosphere, IBL and haze passes fill them: no cascades, the plain sun colour,
+        // the sky colour as linear light (the same expansion the clear colour gets, without the exposure).
+        for (glm::mat4& m : fd.cascadeViewProj) m = glm::mat4(1.0f);
+        fd.cascadeSplits = glm::vec4(0.0f);
+        fd.shadowParams = glm::vec4(0.0f);
+        fd.sunRadiance = glm::vec4(sunColor * sunIntensity, sunIntensity > 0.0f ? 1.0f : 0.0f);
+        fd.skyColor = glm::vec4(LightingMath::inverseToneMapACES(skyColor), 0.0f);
+        fd.skyParams = glm::vec4(sky == Handel<Cubemap>{} ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f);
+        fd.hazeParams = glm::vec4(0.0f);
         if (auto r = UBO.write(frame, &fd, sizeof(fd)); !r) return r;
 
         // The caller waited on this frame's fence, so its set is free to rewrite.
-        Handel<Cubemap> sky = c->manager.get(skybox) ? skybox : Handel<Cubemap>{};
         if (sky != skyboxInSet[frame]) {
             Cubemap* cubemap = c->manager.get(sky == Handel<Cubemap>{} ? c->vulkan.defaultCubemap : sky);
             if (auto r = writeImageDescriptor(frameSets[frame], 2, cubemap->getView(), c->vulkan.sampler); !r) return r;
@@ -82,6 +92,7 @@ namespace NRE {
         struct { glm::mat4 rayMatrix; glm::vec4 params; } pc{glm::mat4(cameraToWorld * unproject), glm::vec4(1.0f / exposure, 0.0f, 0.0f, 0.0f)};
 
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
+        vkCmdSetCullMode(commandBuffer, VK_CULL_MODE_NONE);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipelineLayout, 0, 1, &frameSets[frame], 0, nullptr);
         vkCmdPushConstants(commandBuffer, pipeline->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);

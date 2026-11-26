@@ -254,6 +254,8 @@ namespace NRE {
         VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
         f13.dynamicRendering = VK_TRUE;
         f13.synchronization2 = VK_TRUE;
+        // glslc's Vulkan 1.3 target turns GLSL's discard into a demote (alpha-masked materials). Required by 1.3.
+        f13.shaderDemoteToHelperInvocation = VK_TRUE;
 
         VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
         f12.bufferDeviceAddress = VK_TRUE;
@@ -370,8 +372,15 @@ namespace NRE {
         if (!err) return err;
         c->vulkan.descriptorLayouts.push_back(frameLayout);
 
+        // Set 1 (material): 0 = base colour, 1 = metallic-roughness, 2 = normal, 3 = the factors (GpuMaterial).
         auto materialLayout = DescriptorSetLayout();
-        err = materialLayout.createLayout(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT);
+        VkDescriptorSetLayoutBinding materialBindings[] = {
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        };
+        err = materialLayout.createLayout(materialBindings);
         if (!err) return err;
         c->vulkan.descriptorLayouts.push_back(materialLayout);
 
@@ -379,8 +388,19 @@ namespace NRE {
         err = defaultTexture.loadTextureFromMemory(DefaultAssets::defaultTexturePng,sizeof(DefaultAssets::defaultTexturePng));
         if (!err) return err;
         c->vulkan.defaultTexture = c->manager.create(std::move(defaultTexture));
+        {
+            // Both linear: white is 1 either way, and the normal must be exactly (128, 128, 255) / 255.
+            const uint32_t white = 0xffffffff, flatNormal = 0xffff8080;   // little-endian RGBA
+            Texture whiteTexture, flatNormalTexture;
+            err = whiteTexture.uploadPixels(&white, 1, 1, VK_FORMAT_R8G8B8A8_UNORM);
+            if (!err) return err;
+            err = flatNormalTexture.uploadPixels(&flatNormal, 1, 1, VK_FORMAT_R8G8B8A8_UNORM);
+            if (!err) return err;
+            c->vulkan.whiteTexture = c->manager.create(std::move(whiteTexture));
+            c->vulkan.flatNormalTexture = c->manager.create(std::move(flatNormalTexture));
+        }
         Material defaultMaterial;
-        defaultMaterial.baseTexture = c->vulkan.defaultTexture;
+        defaultMaterial.metallic = 0.0f;
         err = defaultMaterial.createDescriptorSet();
         if (!err) return err;
         c->vulkan.defaultMaterial = c->manager.create(std::move(defaultMaterial));
@@ -402,10 +422,11 @@ namespace NRE {
             };
             Handel<Shader> vertex = c->manager.create(Shader(std::span(skyboxVert), ShaderType::VERTEX_SHADER));
             Handel<Shader> fragment = c->manager.create(Shader(std::span(skyboxFrag), ShaderType::FRAGMENT_SHADER));
-            // No vertex input (the vertex shader makes the triangle) and no culling. The sky sits at depth 0, the
-            // cleared value (reverse-Z), so GREATER_OR_EQUAL passes only where nothing was drawn, and it doesn't write depth.
+            // No vertex input (the vertex shader makes the triangle) and no culling (drawSkybox sets it). The sky sits
+            // at depth 0, the cleared value (reverse-Z), so GREATER_OR_EQUAL passes only where nothing was drawn, and
+            // it doesn't write depth.
             Pipeline skybox;
-            err = skybox.createPipeline(vertex, fragment, {}, VK_CULL_MODE_NONE, VK_COMPARE_OP_GREATER_OR_EQUAL, false);
+            err = skybox.createPipeline(vertex, fragment, {}, VK_COMPARE_OP_GREATER_OR_EQUAL, false);
             c->manager.destroy(vertex, true);   // the pipeline doesn't need the modules any more
             c->manager.destroy(fragment, true);
             if (!err) return err;
@@ -1218,13 +1239,13 @@ namespace NRE {
         }
     }
 
-    Result<Handel<Texture>> createTexture(std::string path) {
+    Result<Handel<Texture>> createTexture(std::string path, bool srgb) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         Texture texture;
-        if (auto loaded = texture.loadTexture(path); !loaded) return std::unexpected(loaded.error());
+        if (auto loaded = texture.loadTexture(path, srgb); !loaded) return std::unexpected(loaded.error());
         // With RenderErrorPolicy::Ignore a failed load returns success without an image; the empty handle
-        // makes materials fall back to the default texture.
+        // makes materials fall back to their defaults.
         if (texture.getView() == VK_NULL_HANDLE) return Handel<Texture>{};
         return c->manager.create(std::move(texture));
     }
@@ -1239,8 +1260,12 @@ namespace NRE {
     Result<void> destroyMaterial(Handel<Material> material) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
-        // The descriptor set stays allocated: the pool can't free single sets.
-        c->manager.destroy(material);
+        // The descriptor set stays allocated: the pool can't free single sets. Its factor UBO is freed now, so
+        // wait for the frames in flight that may still read it.
+        if (c->manager.get(material)) {
+            vkDeviceWaitIdle(c->vulkan.device);
+            c->manager.destroy(material, true);
+        }
         return {};
     }
 
@@ -1248,17 +1273,16 @@ namespace NRE {
         auto m = getMaterial(material);
         if (!m) return std::unexpected(m.error());
         auto c = context();
-        Handel<Texture> base = texture == Handel<Texture>{} ? c->vulkan.defaultTexture : texture;
-        Texture* t = c->manager.get(base);
-        if (!t) {
+        if (texture != Handel<Texture>{} && !c->manager.get(texture)) {
             auto error = ErrorHandeling::badHandle("texture", texture, "createTexture()", std::source_location::current());
             ErrorHandeling::handleError(error);
             return std::unexpected(error);
         }
+        if ((*m)->descriptorSet == VK_NULL_HANDLE) return {};   // creating it failed under RenderErrorPolicy::Ignore
         // Frames in flight may still be reading this set, and a set can't change while the GPU uses it.
         vkDeviceWaitIdle(c->vulkan.device);
-        (*m)->baseTexture = base;
-        return writeImageDescriptor((*m)->descriptorSet, 0, t->getView(), c->vulkan.sampler);
+        (*m)->baseTexture = texture;   // empty: white
+        return (*m)->writeTexture(0);
     }
 
     Result<std::vector<Handel<Material>>> getModelMaterials(Handel<Model> model) {

@@ -204,6 +204,9 @@ namespace NRE {
     RENDERER_API Result<void> pollEvents();
     RENDERER_API Result<Handel<Shader>> createShader(std::string shaderPath,ShaderType type);
     RENDERER_API Result<void> destroyShader(Handel<Shader> shader);
+    // Shaders for it: vertex shaders #include "nre/frame.glsl" (nreFrame.viewProj, ...), fragment shaders
+    // #include "nre/lighting.glsl" and call nreMaterialSurface + nreShade (see example/shaders). nre_compile_shaders()
+    // puts the includes on the path. Back faces are culled unless the mesh's material is double-sided.
     RENDERER_API Result<Handel<Pipeline>> createPipeline(Handel<Shader> vertexShader,Handel<Shader> fragmentShader);
     RENDERER_API Result<void> destroyPipeline(Handel<Pipeline> pipeline);
     RENDERER_API Result<void> bindPipeline(Handel<Pipeline> pipeline);
@@ -239,17 +242,21 @@ namespace NRE {
 
     // Textures and materials. Models loaded from glTF make their own; these are for adding or swapping them yourself.
     // Materials belong to the model, so changing one changes every instance of that model.
-    // Loads an image file (PNG, JPEG, ...) as a color (sRGB) texture.
-    RENDERER_API Result<Handel<Texture>> createTexture(std::string path);
+    // Loads an image file (PNG, JPEG, ...). srgb = true for colour images (base colour), decoded from sRGB when sampled.
+    // Data maps hold plain numbers and need srgb = false: normal maps and metallic-roughness maps.
+    RENDERER_API Result<Handel<Texture>> createTexture(std::string path, bool srgb = true);
     // Give the materials that use this texture another one first: they keep pointing at it.
     RENDERER_API Result<void> destroyTexture(Handel<Texture> texture);
-    // An empty baseTexture uses the default texture. metallicTexture and normalTexture are stored but not used yet.
+    // Textures as glTF uses them: baseTexture is the colour (sRGB), metallicTexture holds roughness in green and
+    // metallic in blue, normalTexture is a tangent-space normal map (+Y up); load both of those with srgb = false.
+    // An empty baseTexture is white, an empty normalTexture flat. Without a metallicTexture the material isn't
+    // metal and has roughness 1; with one, the texture's values are used as they are.
     RENDERER_API Result<Handel<Material>> createMaterial(Handel<Texture> baseTexture = {},
                                                          Handel<Texture> metallicTexture = {},
                                                          Handel<Texture> normalTexture = {});
-    // Models still using it fall back to the default material.
+    // Models still using it fall back to the default material (white). Waits for the GPU to finish the frames in flight.
     RENDERER_API Result<void> destroyMaterial(Handel<Material> material);
-    // An empty texture uses the default texture. Waits for the GPU to finish the frames in flight, so don't call it every frame.
+    // An empty texture means white. Waits for the GPU to finish the frames in flight, so don't call it every frame.
     RENDERER_API Result<void> setMaterialBaseTexture(Handel<Material> material, Handel<Texture> texture);
     // The model's material slots, in the file's material order. Empty for a model without materials (like OBJ).
     RENDERER_API Result<std::vector<Handel<Material>>> getModelMaterials(Handel<Model> model);
@@ -276,17 +283,8 @@ namespace NRE {
 
     // The sun: one directional light per scene, kept apart from the scene's other lights so it can drive the
     // sky and (later) shadows. Same direction and intensity conventions as createDirectionalLight.
-    // A scene starts without one (intensity 0). Shaders read it from the Frame block:
-    //
-    //     layout(set = 0, binding = 0) uniform Frame {
-    //         mat4 viewProj;
-    //         vec4 cameraPos;
-    //         uint lightCount;
-    //         vec4 sunDirection;   // xyz: the way the light travels, normalized
-    //         vec4 sunColor;       // rgb: color, w: intensity (0: no sun)
-    //     } frame;
-    //
-    // Shaders that stop at lightCount still work.
+    // A scene starts without one (intensity 0). nreShade lights with it; shaders can also read nreFrame.sunDirection
+    // (the way the light travels) and nreFrame.sunColor (rgb colour, w intensity) from nre/frame.glsl.
     RENDERER_API Result<void> setSun(glm::vec3 direction, glm::vec3 color = glm::vec3(1.0f), float intensity = 3.0f);
     // Keeps the color and intensity, e.g. for a day/night cycle.
     RENDERER_API Result<void> setSunDirection(glm::vec3 direction);
@@ -309,7 +307,7 @@ namespace NRE {
     // Waits for the GPU to finish the frames in flight. Scenes using it go back to having no skybox.
     RENDERER_API Result<void> destroyCubemap(Handel<Cubemap> cubemap);
     // The bound scene's sky, drawn behind everything (3D only). An empty handle removes it: the clear color shows again.
-    // Shaders can also sample it, e.g. for reflections: layout(set = 0, binding = 2) uniform samplerCube skybox;
+    // Shaders can also sample it, e.g. for reflections: nreSky in nre/frame.glsl (set 0, binding 2).
     // Without a skybox that binding is a black cubemap.
     RENDERER_API Result<void> setSkybox(Handel<Cubemap> cubemap);
 

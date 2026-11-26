@@ -2,6 +2,7 @@
 // Run through ctest (one test per scenario) or directly: nre_visual_test <scenario> [--update-golden].
 #include "capture.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -111,6 +112,32 @@ namespace {
         TRY(setCameraRotation(0.0f, 0.0f));
     }
 
+    // The demo's sun, from above and slightly in front of a camera looking down -Z.
+    void setUpSun() {
+        TRY(setSun(glm::vec3(-0.4f, -1.0f, -0.3f), glm::vec3(1.0f), 3.0f));
+    }
+
+    // A model at position, seen from a camera at the origin looking down -Z. 3 m away, 1 m is about 139 px.
+    Handel<Instance> placeModel(const std::string& path, glm::vec3 position) {
+        auto model = TRY(createModel(path));
+        auto instance = TRY(createInstance(model));
+        TRY(addInstanceToScene(instance));
+        TRY(translateInstance(instance, position));
+        TRY(setCameraPosition(glm::vec3(0.0f)));
+        TRY(setCameraRotation(0.0f, 0.0f));
+        return instance;
+    }
+
+    float luminance(glm::vec3 c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; }
+
+    // Largest luminance over x0..x1, y0..y1 (ends exclusive).
+    float maxLuminance(const Image& image, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+        float best = 0.0f;
+        for (uint32_t y = y0; y < y1; ++y)
+            for (uint32_t x = x0; x < x1; ++x) best = std::max(best, luminance(image.at(x, y)));
+        return best;
+    }
+
     void bindExamplePipeline(const char* vertexFile, const char* fragmentFile) {
         auto vertex = TRY(createShader(std::string(SHADER_DIR) + "/" + vertexFile, ShaderType::VERTEX_SHADER));
         auto fragment = TRY(createShader(std::string(SHADER_DIR) + "/" + fragmentFile, ShaderType::FRAGMENT_SHADER));
@@ -131,12 +158,14 @@ NRE_SCENARIO(capture_clear) {
     return true;
 }
 
-// The police car 3 units ahead of a camera at the origin, lit by the demo shaders.
+// The police car 3 units ahead of a camera at the origin, lit by the demo shaders and the sun.
+// car.png (the look before materials, without a sun) stays on disk: the ambient is compared against it later.
 NRE_SCENARIO(baseline_car) {
     Session session(ApiMode::SceneMode);
     bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
     setUpCar(true);
-    return matchesGolden(renderAndCapture(), "car.png");
+    setUpSun();
+    return matchesGolden(renderAndCapture(), "car-lit.png");
 }
 
 // Only the sky (clear_day), camera looking down -Z. FunctionDrawMode with no draws.
@@ -203,7 +232,8 @@ NRE_SCENARIO(function_mode_car) {
     Session session(ApiMode::FunctionDrawMode);
     bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
     Handel<Instance> car = setUpCar(false);
-    return matchesGolden(renderAndCapture([car] { TRY(drawInstance(car)); }), "car.png");
+    setUpSun();
+    return matchesGolden(renderAndCapture([car] { TRY(drawInstance(car)); }), "car-lit.png");
 }
 
 // An LDR cubemap sky looks the same at any exposure.
@@ -243,6 +273,87 @@ NRE_SCENARIO(passthrough_2d) {
     Image image = renderAndCapture();    CHECK(!image.pixels.empty());
     CHECK(near(image.at(kWidth / 2, kHeight / 2), glm::vec3(1.0f, 0.0f, 1.0f), 2.0f / 255.0f));
     return true;
+}
+
+// An alpha-masked quad facing the camera: the transparent cells of its checker show the sky colour.
+NRE_SCENARIO(alpha_mask) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpSun();
+    placeModel(TEST_ASSET_DIR "/alphaQuad.gltf", glm::vec3(0.0f, 0.0f, -3.0f));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    // The 2 m quad covers about x 181..459, y 101..379, in 4x4 cells of ~70 px. The top-left cell is opaque, the
+    // one to its right a hole.
+    glm::vec3 sky{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    CHECK(near(image.at(285, 136), sky, 2.0f / 255.0f));
+    CHECK(!near(image.at(216, 136), sky, 10.0f / 255.0f));
+    return true;
+}
+
+// The double-sided quad seen from behind: its back face is drawn (not culled), lit from the camera's side.
+NRE_SCENARIO(double_sided) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSun(glm::vec3(0.3f, -0.5f, 1.0f), glm::vec3(1.0f), 3.0f));
+    placeModel(TEST_ASSET_DIR "/alphaQuad.gltf", glm::vec3(0.0f, 0.0f, -3.0f));
+    TRY(setCameraPosition(glm::vec3(0.0f, 0.0f, -6.0f)));
+    TRY(cameraLookAt(glm::vec3(0.0f, 0.0f, -3.0f)));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    // Mirrored: the front's opaque top-left cell is now at the top right, with a hole to its left.
+    glm::vec3 sky{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    CHECK(!near(image.at(424, 136), sky, 10.0f / 255.0f));
+    CHECK(near(image.at(355, 136), sky, 2.0f / 255.0f));
+    return true;
+}
+
+// Two white spheres, roughness 0.1 (left) and 0.9 (right): the smooth one has a much brighter highlight.
+// A dark sky and a low exposure keep the rough one well below the top of the tone curve.
+NRE_SCENARIO(roughness) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSun(glm::vec3(-0.3f, -0.5f, -1.0f), glm::vec3(1.0f), 3.0f));
+    TRY(setSkyColor(glm::vec3(0.02f)));
+    TRY(setExposure(0.1f));
+    placeModel(TEST_ASSET_DIR "/materialSpheres.gltf", glm::vec3(0.0f, 0.0f, -3.0f));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    float smooth = maxLuminance(image, 0, 0, kWidth / 2, kHeight);
+    float rough = maxLuminance(image, kWidth / 2, 0, kWidth, kHeight);
+    std::printf("max luminance: smooth %.3f, rough %.3f\n", smooth, rough);
+    CHECK(smooth > rough * 1.5f);
+    return true;
+}
+
+// An OBJ cube without UVs or normals: the derivative-based normal must not give NaN or black pixels.
+NRE_SCENARIO(no_uv_mesh) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpSun();
+    auto cube = placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));
+    TRY(rotateInstance(cube, glm::radians(35.0f), glm::vec3(0.0f, 1.0f, 0.0f)));
+    TRY(rotateInstance(cube, glm::radians(25.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    // The 1 m cube is ~139 px across around the centre; this box is inside it at any rotation.
+    for (uint32_t y = 200; y < 280; ++y) {
+        for (uint32_t x = 280; x < 360; ++x) {
+            glm::vec3 p = image.at(x, y);
+            CHECK(!glm::any(glm::isnan(p)) && !glm::any(glm::isinf(p)));
+            CHECK(glm::all(glm::greaterThan(p, glm::vec3(2.0f / 255.0f))));
+        }
+    }
+    return true;
+}
+
+// The police car with the sun, using its real material factors.
+NRE_SCENARIO(demo_car_lit) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpCar(true);
+    setUpSun();
+    return matchesGolden(renderAndCapture(), "car-lit.png");
 }
 
 int main(int argc, char** argv) {

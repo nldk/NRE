@@ -86,8 +86,9 @@ namespace NRE {
             Pipeline* pipeline = c->manager.get(v.framePipeline);
             if (scene && pipeline) {
                 scene->bindFrameData(cmd, *pipeline);
+                VkCullModeFlags cullMode = Model::unknownCullMode;   // set by the first mesh
                 for (const QueuedDraw& draw : draws) {
-                    if (Model* model = c->manager.get(draw.model)) (void)model->draw(cmd, *pipeline, draw.matrix);
+                    if (Model* model = c->manager.get(draw.model)) (void)model->draw(cmd, *pipeline, draw.matrix, cullMode);
                 }
                 // After the geometry, so the sky only fills what it left empty.
                 (void)scene->drawSkybox(cmd);

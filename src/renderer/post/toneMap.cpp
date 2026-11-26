@@ -20,7 +20,7 @@ namespace NRE {
         // No vertex input, no culling, and depth ignored: the output pass has a depth attachment (the unsafe
         // frame callback draws in the same pass), so the pipeline declares one but never tests or writes it.
         Pipeline toneMap;
-        auto err = toneMap.createPipeline(vertex, fragment, {}, VK_CULL_MODE_NONE, VK_COMPARE_OP_ALWAYS, false,
+        auto err = toneMap.createPipeline(vertex, fragment, {}, VK_COMPARE_OP_ALWAYS, false,
                                           c->vulkan.swapchain.image_format);
         c->manager.destroy(vertex, true);   // the pipeline doesn't need the modules any more
         c->manager.destroy(fragment, true);
@@ -57,6 +57,7 @@ namespace NRE {
         if (!p || set == VK_NULL_HANDLE) return;   // create() failed under RenderErrorPolicy::Ignore, and said so
         glm::vec4 params{exposure, passthrough2D ? 1.0f : 0.0f, 0.0f, 0.0f};
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, p->pipeline);
+        vkCmdSetCullMode(commandBuffer, VK_CULL_MODE_NONE);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, p->pipelineLayout, 1, 1, &set, 0, nullptr);
         vkCmdPushConstants(commandBuffer, p->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(params), &params);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);

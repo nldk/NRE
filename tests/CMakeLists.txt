@@ -15,6 +15,7 @@ if(NRE_UNSAFE_API)
     nre_compile_shaders(nre_visual_test ${PROJECT_SOURCE_DIR}/example/shaders ${CMAKE_CURRENT_SOURCE_DIR}/visual/shaders)
     target_compile_definitions(nre_visual_test PRIVATE
         ASSET_DIR="${PROJECT_SOURCE_DIR}/example/assets"
+        TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
         GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/visual/golden"
     )
     set_target_properties(nre_visual_test PROPERTIES
@@ -27,10 +28,12 @@ if(NRE_UNSAFE_API)
 
     # One test per scenario name registered with NRE_SCENARIO (underscores become dashes).
     foreach(scenario capture-clear baseline-car baseline-skybox far-object
-                     exposure-brighter sky-color function-mode-car skybox-exposure resize-target passthrough-2d)
+                     exposure-brighter sky-color function-mode-car skybox-exposure resize-target passthrough-2d
+                     alpha-mask double-sided roughness no-uv-mesh demo-car-lit)
         add_test(NAME ${scenario} COMMAND nre_visual_test ${scenario})
         set_tests_properties(${scenario} PROPERTIES
-            FAIL_REGULAR_EXPRESSION "Validation Error"
+            # vk-bootstrap's debug messenger prints "[ERROR: Validation]".
+            FAIL_REGULAR_EXPRESSION "Validation Error;ERROR: Validation"
             ENVIRONMENT "NRE_TEST_OUT=${CMAKE_CURRENT_BINARY_DIR}/out"
         )
     endforeach()
