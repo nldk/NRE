@@ -32,8 +32,9 @@ if(NRE_UNSAFE_API)
                      alpha-mask double-sided roughness no-uv-mesh demo-car-lit normal-map metallic-texture)
         add_test(NAME ${scenario} COMMAND nre_visual_test ${scenario})
         set_tests_properties(${scenario} PROPERTIES
-            # vk-bootstrap's debug messenger prints "[ERROR: Validation]".
-            FAIL_REGULAR_EXPRESSION "Validation Error;ERROR: Validation"
+            # vk-bootstrap's debug messenger prints "[<severity>: <types>]", e.g. "[ERROR: Validation]" or
+            # "[WARNING: General | Validation]"; any validation error or warning fails the test.
+            FAIL_REGULAR_EXPRESSION "Validation Error;\\[(ERROR|WARNING): [^]]*Validation"
             ENVIRONMENT "NRE_TEST_OUT=${CMAKE_CURRENT_BINARY_DIR}/out"
         )
     endforeach()
