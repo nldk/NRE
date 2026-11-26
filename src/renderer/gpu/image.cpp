@@ -20,6 +20,7 @@ namespace NRE {
                                     bool cubemap) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
+        (void)destroyImage();   // creating it again replaces the old one
 
         this->format = format;
         this->mipLevels = mipLevels;
@@ -75,16 +76,37 @@ namespace NRE {
             return {};
         }
 
+        if (usage & VK_IMAGE_USAGE_STORAGE_BIT) {
+            imageViewCreateInfo.viewType = cubemap ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+            for (uint32_t level = 0; level < mipLevels; ++level) {
+                imageViewCreateInfo.subresourceRange = {aspectFor(format), level, 1, 0, layers};
+                VkImageView mipView = VK_NULL_HANDLE;
+                if (VkResult r = vkCreateImageView(c->vulkan.device, &imageViewCreateInfo, nullptr, &mipView); r != VK_SUCCESS) {
+                    (void)destroyImage();
+                    auto error = Error{ErrorCode::ImageViewCreationFailed, "Failed to create the mip " + std::to_string(level)
+                                       + " view of a " + std::to_string(width) + "x" + std::to_string(height) + " "
+                                       + string_VkFormat(format) + " image: " + std::string(ErrorHandeling::vkResultName(r))};
+                    if (ErrorHandeling::handleError(error)) {
+                        return std::unexpected(error);
+                    }
+                    return {};
+                }
+                mipViews.push_back(mipView);
+            }
+        }
+
         return {};
     }
 
     Result<void> Image::destroyImage() {
         // Nothing to free: return before needing the context, which may already be gone (Images inside the Context
         // itself are destructed while it's being torn down).
-        if (image == VK_NULL_HANDLE && view == VK_NULL_HANDLE) return {};
+        if (image == VK_NULL_HANDLE && view == VK_NULL_HANDLE && mipViews.empty()) return {};
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
 
+        for (VkImageView mipView : mipViews) vkDestroyImageView(c->vulkan.device, mipView, nullptr);
+        mipViews.clear();
         if (view)  vkDestroyImageView(c->vulkan.device, view, nullptr);
         if (image) vmaDestroyImage(c->vulkan.allocator, image, allocation);
         image = VK_NULL_HANDLE; allocation = nullptr; view = VK_NULL_HANDLE;

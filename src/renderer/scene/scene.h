@@ -44,6 +44,13 @@ namespace NRE {
             return glm::lookAt(position, position + forward(), worldUp);
         }
     };
+    // Where the scene's sky comes from this frame (FrameData::skyParams.x).
+    enum class SkySource : uint32_t {
+        Color = 0,        // the sky colour: the clear colour shows, and the ambient is a hemisphere made from it
+        Cubemap = 1,      // the skybox (LDR, shown as authored)
+        Procedural = 2,   // the atmosphere from the sun (Sky)
+    };
+
     class Scene {
         std::vector<Handel<Instance>> instances;
         std::vector<Handel<Light>> lights;
@@ -51,9 +58,15 @@ namespace NRE {
         VkDescriptorSet frameSets[max_frames_in_flight]{};
         PerFrameBuffer UBO;
         PerFrameBuffer Lights;
-        // What binding 2 of each frame's set points at; empty = the default (black) cubemap. Kept as handles,
-        // not views: a destroyed cubemap's handle never matches again, even if Vulkan reuses its view's value.
-        Handel<Cubemap> skyboxInSet[max_frames_in_flight]{};
+        // What binding 2 of each frame's set points at: the skybox, the procedural sky (that frame slot's cubemap), or
+        // with neither the default (black) cubemap. Kept as handles, not views: a destroyed cubemap's handle never
+        // matches again, even if Vulkan reuses its view's value.
+        struct SkyBinding {
+            Handel<Cubemap> skybox;
+            bool procedural = false;
+            bool operator==(const SkyBinding&) const = default;
+        };
+        SkyBinding skyInSet[max_frames_in_flight]{};
     public:
         Camera camera;
         // Empty, or destroyed: no skybox. Shaders then see the default cubemap at binding 2.
@@ -67,13 +80,21 @@ namespace NRE {
         float exposure = 1.0f;
         // setSkyColor: the background where nothing is drawn, as a display colour (looks the same at any exposure).
         glm::vec3 skyColor = defaultSkyColor;
-        // setSceneLighting: picks the defaults applyLightingDefaults() resets the settings below to.
+        // setSceneLighting: picks the defaults applyLightingDefaults() resets the settings below to (createScene()
+        // applies them too). Landscape also tints the sun by the atmosphere and adds the automatic exposure.
         SceneLighting lighting = SceneLighting::Small;
+        // Set by applyLightingDefaults() only (it's the one place the per-mode defaults live):
         // setShadowDistance: how far from the camera the sun casts shadows, in metres. 0 = no sun shadows. Never negative.
-        float shadowDistance = 20.0f;
+        float shadowDistance{};
+        // The sky without a skybox: the procedural atmosphere (Landscape) or the sky colour (Small).
+        bool proceduralSky{};
         // Sun shadow cascades this frame (0 = none), set by writeFrameData() with their matrices; the shadow pass draws
         // this many.
         uint32_t shadowCascades = 0;
+        // This frame's sky source and tone-map exposure (setExposure x, in Landscape, the automatic exposure), set by
+        // writeFrameData().
+        SkySource skySource = SkySource::Color;
+        float frameExposure = 1.0f;
         void addInstance(Handel<Instance> instance);
         void removeInstance(Handel<Instance> instance);
         const std::vector<Handel<Instance>>& getInstances() const { return instances; }
@@ -81,20 +102,19 @@ namespace NRE {
         void addLight(Handel<Light> light);
         void removeLight(Handel<Light> light);
         const std::vector<Handel<Light>>& getLights() const { return lights; }
-        // Writes this frame's camera, lights and sun shadow cascades (and points set 0 at the skybox). Only once this
-        // frame's fence has been waited on: the GPU may still be reading the previous contents until then.
+        // Writes this frame's camera, lights, sun (radiance, shadow cascades), sky source and exposure (and points
+        // set 0 at the sky). Only once this frame's fence has been waited on: the GPU may still be reading the previous
+        // contents until then.
         Result<void> writeFrameData();
         // Binds pipeline and this frame's set 0 (written by writeFrameData()).
         void bindFrameData(VkCommandBuffer commandBuffer, const Pipeline& pipeline);
         // A draw for every visible instance.
         void appendDraws(std::vector<QueuedDraw>& out) const;
-        // Draws the skybox behind everything drawn so far, if the scene has one (3D only). Binds the skybox
-        // pipeline, so draw it last. Needs writeFrameData() earlier in the same frame.
-        Result<void> drawSkybox(VkCommandBuffer commandBuffer);
         Result<void> createUboAndLights();
     };
 
-    // Resets the scene's per-mode settings to the defaults of scene.lighting (setSceneLighting): the shadow
-    // distance (Small 20 m, Landscape 500 m). The sun, lights, exposure and sky colour are kept.
+    // Resets the scene's per-mode settings to the defaults of scene.lighting (setSceneLighting), and is how a new
+    // scene gets them: Small: shadows 20 m, the sky colour without a skybox; Landscape: shadows 500 m, the procedural
+    // sky without a skybox. The sun, lights, exposure, sky colour and skybox are kept.
     void applyLightingDefaults(Scene& scene);
 }

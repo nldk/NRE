@@ -416,29 +416,15 @@ namespace NRE {
             if (!err) return err;
             c->vulkan.defaultCubemap = c->manager.create(std::move(defaultCubemap));
         }
-        {
-            static constexpr uint32_t skyboxVert[] = {
-#include "embeddedShaders/skybox.vert.inc"
-            };
-            static constexpr uint32_t skyboxFrag[] = {
-#include "embeddedShaders/skybox.frag.inc"
-            };
-            BuiltinShader vertex(skyboxVert, ShaderType::VERTEX_SHADER);
-            BuiltinShader fragment(skyboxFrag, ShaderType::FRAGMENT_SHADER);
-            // No vertex input (the vertex shader makes the triangle) and no culling (drawSkybox sets it). The sky sits
-            // at depth 0, the cleared value (reverse-Z), so GREATER_OR_EQUAL passes only where nothing was drawn, and
-            // it doesn't write depth.
-            Pipeline skybox;
-            err = skybox.createPipeline(vertex.handle, fragment.handle, {}, VK_COMPARE_OP_GREATER_OR_EQUAL, false);
-            if (!err) return err;
-            if (skybox.pipeline != VK_NULL_HANDLE) c->vulkan.skyboxPipeline = c->manager.create(std::move(skybox));
-        }
         err = c->vulkan.toneMap.create();
         if (!err) return err;
         err = c->vulkan.toneMap.resize(sceneExtent(c));
         if (!err) return err;
         // Before any scene: createScene() points every frame set's binding 3 at it.
         err = c->vulkan.shadowMaps.create();
+        if (!err) return err;
+        // The sky pass, and the procedural sky's LUT (computed now) and cubemaps. Scenes point binding 2 at those.
+        err = c->vulkan.sky.create();
         if (!err) return err;
 
         // FunctionDrawMode draws with the bound scene's camera and lights, so give it one: the camera
@@ -466,6 +452,7 @@ namespace NRE {
         destroyDepthImage(c);
         c->vulkan.toneMap.destroy();
         c->vulkan.shadowMaps.destroy();
+        c->vulkan.sky.destroy();
 #ifdef NRE_UNSAFE_API
         (void)c->unsafeContext.targetColor.destroyImage();
         (void)c->unsafeContext.targetDepth.destroyImage();
@@ -884,6 +871,7 @@ namespace NRE {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         Scene scene{};
+        applyLightingDefaults(scene);   // Small's settings: the one place per-mode defaults are set
         auto err = scene.createUboAndLights();
         if (!err) return std::unexpected(err.error());
         Handel<Scene> sceneHandel = c->manager.create(std::move(scene));
@@ -1065,7 +1053,7 @@ namespace NRE {
 #ifndef NDEBUG
         if (!(meters >= 0.0f)) {   // also catches NaN
             auto error = Error{ErrorCode::InvalidArgument, "setShadowDistance(): the distance must not be negative, got "
-                               + std::to_string(meters) + ". 0 turns sun shadows off; the default is 20 m."};
+                               + std::to_string(meters) + ". 0 turns sun shadows off; the default is 20 m (Small) / 500 m (Landscape)."};
             ErrorHandeling::handleError(error);
             return std::unexpected(error);
         }

@@ -196,12 +196,14 @@ generate_export_header(renderer
 
 target_include_directories(renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer)
 
-# Built-in shaders (the skybox): compiled to SPIR-V as a list of numbers (glslc -mfmt=num) that the
-# renderer #includes into a uint32_t array, so librenderer.so doesn't need any files next to it.
-# Used as #include "embeddedShaders/skybox.vert.inc". They can #include "nre/frame.glsl" like user shaders.
+# Built-in shaders (sky, tone map, shadows and the compute passes): compiled to SPIR-V as a list of numbers
+# (glslc -mfmt=num) that the renderer #includes into a uint32_t array, so librenderer.so doesn't need any files next
+# to it. Used as #include "embeddedShaders/sky.vert.inc". They can #include "nre/frame.glsl" like user shaders, and
+# files under src/renderer too (e.g. "lighting/atmosphere.inc", the constants the C++ side shares with them).
 file(GLOB NRE_BUILTIN_SHADERS CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/shaders/*.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/shaders/*.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/shaders/*.comp
 )
 set(NRE_BUILTIN_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/embeddedShaders)
 set(NRE_BUILTIN_SHADER_OUTPUTS)
@@ -211,7 +213,7 @@ foreach(src ${NRE_BUILTIN_SHADERS})
     add_custom_command(
         OUTPUT  ${inc}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${NRE_BUILTIN_SHADER_DIR}
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O -mfmt=num -I ${NRE_SHADER_INCLUDE_DIR} -MD -MF ${inc}.d -o ${inc} ${src}
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O -mfmt=num -I ${NRE_SHADER_INCLUDE_DIR} -I ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer -MD -MF ${inc}.d -o ${inc} ${src}
         DEPENDS ${src}
         DEPFILE ${inc}.d
         COMMENT "Compiling built-in shader ${name}"

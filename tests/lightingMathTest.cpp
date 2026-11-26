@@ -187,6 +187,21 @@ static void sunFadesSmoothly() {
     CHECK(deep.x == 0.0f && deep.z == 0.0f);
 }
 
+// The cross-check values of docs/superpowers/notes/2026-11-26-sky-prototype.md (Python and C++ agree to 6 digits).
+static void transmittanceMatchesPrototype() {
+    glm::vec3 t90 = sunTransmittance(glm::radians(90.0f));
+    CHECK_NEAR(t90.x, 0.935917, 2e-6); CHECK_NEAR(t90.y, 0.863548, 2e-6); CHECK_NEAR(t90.z, 0.758685, 2e-6);
+    glm::vec3 t2 = sunTransmittance(glm::radians(2.0f));
+    CHECK_NEAR(t2.x, 0.293224, 2e-6); CHECK_NEAR(t2.y, 0.075599, 2e-6); CHECK_NEAR(t2.z, 0.005459, 2e-6);
+}
+
+static void sunElevationFromDirection() {
+    CHECK_NEAR(sunElevation({0.0f, -1.0f, 0.0f}), glm::radians(90.0f), 1e-6);
+    CHECK_NEAR(sunElevation({0.0f, 2.0f, 0.0f}), glm::radians(-90.0f), 1e-6);   // not normalized
+    CHECK_NEAR(sunElevation({0.0f, -1.0f, -1.0f}), glm::radians(45.0f), 1e-6);
+    CHECK(std::isfinite(sunElevation(glm::vec3(0.0f))));
+}
+
 static void hazeVisibility() {
     CHECK_NEAR(std::exp(-hazeDensityForVisibility(8000.0f) * 8000.0f), 0.05, 1e-4);
     CHECK(hazeDensityForVisibility(0.0f) == 0.0f);
@@ -207,6 +222,8 @@ int main() {
     sunsetRed();
     autoExposureShape();
     sunFadesSmoothly();
+    transmittanceMatchesPrototype();
+    sunElevationFromDirection();
     hazeVisibility();
     return g_failed ? 1 : 0;
 }

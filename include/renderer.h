@@ -293,7 +293,10 @@ namespace NRE {
     // The sun: one directional light per scene, kept apart from the scene's other lights so it can drive the
     // sky and shadows. Same direction and intensity conventions as createDirectionalLight.
     // A scene starts without one (intensity 0). nreShade lights with it; shaders can also read nreFrame.sunDirection
-    // (the way the light travels) and nreFrame.sunColor (rgb colour, w intensity) from nre/frame.glsl.
+    // (the way the light travels), nreFrame.sunColor (rgb colour, w intensity) and nreFrame.sunRadiance (the light
+    // that reaches objects) from nre/frame.glsl. In Landscape the sun also makes the sky: its light is tinted by the
+    // atmosphere (warm and dim near the horizon, gone once it has set), and the intensity scales the sky's brightness
+    // with it (3, the default, is the standard look).
     RENDERER_API Result<void> setSun(glm::vec3 direction, glm::vec3 color = glm::vec3(1.0f), float intensity = 3.0f);
     // Keeps the color and intensity, e.g. for a day/night cycle.
     RENDERER_API Result<void> setSunDirection(glm::vec3 direction);
@@ -305,7 +308,7 @@ namespace NRE {
     RENDERER_API Result<void> setSceneLighting(SceneLighting lighting);
     RENDERER_API Result<SceneLighting> getSceneLighting();
     // How far from the camera the bound scene's sun casts shadows, in metres. 0 turns sun shadows off; must not be
-    // negative. Default 20 (setSceneLighting resets it). The number of cascades follows from it (up to 4); shorter
+    // negative. Default 20 m (Small) / 500 m (Landscape); setSceneLighting resets it. The number of cascades follows from it (up to 4); shorter
     // distances give sharper shadows. Only the sun casts shadows, and only in Render_3D.
     RENDERER_API Result<void> setShadowDistance(float meters);
     // Whether an instance casts sun shadows (it still receives them). Default true; e.g. off for grass, for speed.
@@ -315,10 +318,13 @@ namespace NRE {
     // Tone mapping. Shaders write linear light (values above 1 are fine, and must not tone map themselves);
     // at the end of the frame the renderer multiplies it by the exposure and maps it to the screen with the
     // ACES curve. Render_2D isn't tone mapped: what the shaders write is what's shown.
-    // The bound scene's exposure: 2 is twice as bright, 0.5 half. Must be greater than 0. Default 1.
+    // The bound scene's exposure: 2 is twice as bright, 0.5 half. Must be greater than 0. Default 1. In Landscape it
+    // multiplies an automatic exposure that follows the sun's height (1 from 30 degrees up, rising smoothly to 5 at
+    // night), so noon, golden hour and dusk all read well; dusk still comes out darker and warmer than noon.
     RENDERER_API Result<void> setExposure(float exposure);
-    // The bound scene's background where nothing is drawn and there's no skybox, as the colour it shows on screen
-    // (linear 0..1, at any exposure). Default {0.1, 0.3, 0.6}. A skybox likewise looks like its images at any exposure.
+    // The bound scene's background where nothing is drawn and there's no skybox (in Small; Landscape shows the
+    // procedural sky), as the colour it shows on screen (linear 0..1, at any exposure). Default {0.1, 0.3, 0.6}.
+    // A skybox likewise looks like its images at any exposure.
     RENDERER_API Result<void> setSkyColor(glm::vec3 color);
 
     // Cubemaps and the skybox. A cubemap is six square images of the same size, one per side of a cube around
@@ -328,9 +334,11 @@ namespace NRE {
                                                        std::string bottom, std::string front, std::string back);
     // Waits for the GPU to finish the frames in flight. Scenes using it go back to having no skybox.
     RENDERER_API Result<void> destroyCubemap(Handel<Cubemap> cubemap);
-    // The bound scene's sky, drawn behind everything (3D only). An empty handle removes it: the clear color shows again.
-    // Shaders can also sample it, e.g. for reflections: nreSky in nre/frame.glsl (set 0, binding 2).
-    // Without a skybox that binding is a black cubemap.
+    // The bound scene's sky, drawn behind everything (3D only), as authored, in either lighting mode. An empty handle
+    // removes it: the mode's own sky shows again (Small: the sky colour; Landscape: the procedural sky).
+    // Shaders can also sample it, e.g. for reflections: nreSky in nre/frame.glsl (set 0, binding 2), with
+    // nreFrame.skyParams.x telling what it holds: 1 this cubemap (display values), 2 the procedural sky (linear light,
+    // times nreFrame.skyParams.z), 0 neither (a black cubemap).
     RENDERER_API Result<void> setSkybox(Handel<Cubemap> cubemap);
 
     // Angles are in radians.

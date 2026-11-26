@@ -178,7 +178,7 @@ vec3 nreSunToLight() {
 }
 
 vec3 nreSunRadiance() {
-    return nreFrame.sunColor.rgb * nreFrame.sunColor.w;
+    return nreFrame.sunRadiance.rgb;
 }
 
 // Where the blend from cascade i into cascade i + 1 starts: the last 10% of cascade i. Must match
@@ -274,9 +274,31 @@ vec3 nreLights(Surface s) {
     return color;
 }
 
-// The sky as a sky/ground hemisphere: radiance from above is the sky colour, from below a dim grey ground.
-// blurWidth 1 gives the cosine-weighted average around dir (the irradiance), smaller values sharper reflections.
+// The procedural sky (nreFrame.skyParams.x == 2) around dir, blurred by reading a smaller mip of its cubemap:
+// lod 0 is the sharp sky. Linear light, scaled to the sun's intensity.
+vec3 nre_proceduralSky(vec3 dir, float lod) {
+    return textureLod(nreSky, dir, lod).rgb * nreFrame.skyParams.z;
+}
+
+// The sky as seen around dir. blurWidth 1 gives the cosine-weighted average around dir (the irradiance), smaller
+// values sharper reflections.
+// Procedural sky: read from its cubemap's mips, its ground below the horizon included. The irradiance is five taps
+// of a mip with ~22 degree texels, around dir.
+// Otherwise a sky/ground hemisphere: radiance from above is the sky colour, from below a dim grey ground.
 vec3 nre_hemisphere(vec3 dir, float blurWidth) {
+    if (nreFrame.skyParams.x == 2.0) {
+        float top = float(textureQueryLevels(nreSky) - 1);
+        if (blurWidth < 1.0) return nre_proceduralSky(dir, top * sqrt(clamp(blurWidth, 0.0, 1.0)));
+        vec3 n = normalize(dir);
+        vec3 t = normalize(cross(abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), n));
+        vec3 b = cross(n, t);
+        float lod = max(top - 2.0, 0.0);   // 4x4 texels per face
+        // The centre and four taps 60 degrees off it, cosine-weighted (cos 60 = 0.5).
+        vec3 sum = nre_proceduralSky(n, lod);
+        sum += 0.5 * (nre_proceduralSky(0.5 * n + 0.866 * t, lod) + nre_proceduralSky(0.5 * n - 0.866 * t, lod)
+                    + nre_proceduralSky(0.5 * n + 0.866 * b, lod) + nre_proceduralSky(0.5 * n - 0.866 * b, lod));
+        return sum / 3.0;
+    }
     vec3 sky = nreFrame.skyColor.rgb;
     vec3 ground = vec3(dot(sky, vec3(0.2126, 0.7152, 0.0722)) * 0.3);
     return mix(ground, sky, clamp(0.5 + 0.5 * dir.y / blurWidth, 0.0, 1.0));

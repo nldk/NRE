@@ -25,7 +25,9 @@ namespace NRE {
         glm::vec4 shadowParams;   // x: cascade count (0 = no sun shadows), y: normal offset in shadow-map texels (of the cascade used), zw: 0
         glm::vec4 sunRadiance;    // rgb: light reaching objects (sun colour x intensity x atmosphere tint), w: 1 if the sun is up
         glm::vec4 skyColor;       // rgb: the sky colour expanded with inverseToneMapACES (linear), w: 0
-        glm::vec4 skyParams;      // x: sky source (0 colour, 1 cubemap, 2 procedural), y: specular mip count, z: night ambient, w: 0
+        glm::vec4 skyParams;      // x: sky source (0 colour, 1 cubemap, 2 procedural), y: specular mip count,
+                                  // z: procedural sky brightness = sun intensity / 3 (its cubemap holds the sky, night
+                                  // floor included, at intensity 3; this scales both), else 0. w: 0
         glm::vec4 hazeParams;     // x: density per metre (0 = off), y: 1 / haze height, zw: 0
     };
     static_assert(sizeof(GpuLight) == 32);

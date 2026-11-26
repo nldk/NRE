@@ -24,7 +24,7 @@ namespace NRE {
         VkPipeline       pipeline = VK_NULL_HANDLE;
         // Empty: call createPipeline() to make it, to get its Result.
         Pipeline() = default;
-        // The defaults are for scene geometry. The skybox uses depthCompare GREATER_OR_EQUAL without depthWrite, so
+        // The defaults are for scene geometry. The sky pass uses depthCompare GREATER_OR_EQUAL without depthWrite, so
         // it only fills the pixels still at the cleared far plane. Depth is reverse-Z (cleared to 0, nearer is greater).
         // colorFormat: the HDR scene target by default; the tone-map pass draws in the swapchain format.
         // The cull mode is dynamic state: whoever draws sets it with vkCmdSetCullMode first (Model::draw per mesh,

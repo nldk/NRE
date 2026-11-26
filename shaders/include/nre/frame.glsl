@@ -21,16 +21,19 @@ layout(set = 0, binding = 0) uniform NreFrame {
     mat4 cascadeViewProj[4];       // 128: world -> shadow clip, per cascade
     vec4 cascadeSplits;            // 384: view-space distance where each cascade ends
     vec4 shadowParams;             // 400: x: cascade count (0 = no sun shadows), y: normal offset in shadow-map texels
-    vec4 sunRadiance;              // 416: rgb: sunlight reaching objects, w: 1 if the sun is up
+    vec4 sunRadiance;              // 416: rgb: sunlight reaching objects (Landscape: through the atmosphere), w: 1 if the sun is up
     vec4 skyColor;                 // 432: rgb: the sky colour as linear light
-    vec4 skyParams;                // 448: x: sky source (0 colour, 1 cubemap, 2 procedural), y: specular mips, z: night ambient
+    vec4 skyParams;                // 448: x: sky source (0 colour, 1 cubemap, 2 procedural), y: specular mips,
+                                   //      z: procedural sky brightness (sun intensity / 3; multiplies nreSky, whose
+                                   //      night floor is the night ambient), else 0
     vec4 hazeParams;               // 464: x: density per metre (0 = off), y: 1 / haze height
 } nreFrame;
 
 // The scene's point and directional lights: nreFrame.lightCount of them.
 layout(set = 0, binding = 1) readonly buffer NreLightBuffer { NreLight lights[]; } nreLightBuffer;
 
-// The sky: the scene's skybox cubemap, or a black one when it has none.
+// The sky (nreFrame.skyParams.x): the scene's skybox cubemap (display values), the procedural sky (linear light at
+// the standard sun intensity, with mips: multiply by nreFrame.skyParams.z), or a black one.
 layout(set = 0, binding = 2) uniform samplerCube nreSky;
 
 // The sun's shadow maps: one layer per cascade (nreFrame.shadowParams.x of them), standard depth (0 at the light).

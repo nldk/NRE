@@ -143,33 +143,17 @@ inline float cascadeBlendStart(const std::array<float, 4>& splits, uint32_t i) {
 }
 
 // ---- Atmosphere ------------------------------------------------------------------------------------------------
-// Settled with tests/tools/skyPrototype.py (see docs/superpowers/notes/2026-11-26-sky-prototype.md). The Task 8
-// shaders (transmittanceLut.comp and the sky) copy these values. Lengths are kilometres, coefficients 1/km.
+// Settled with tests/tools/skyPrototype.py (see docs/superpowers/notes/2026-11-26-sky-prototype.md). The values live
+// in lighting/atmosphere.inc, which the built-in sky shaders include too, so both sides use the same numbers.
+// Lengths are kilometres, coefficients 1/km.
 namespace Atmosphere {
-inline constexpr double planetRadius = 6360.0;
-inline constexpr double topRadius = 6460.0;
-inline constexpr double viewerHeight = 0.0015; // 1.5 m
-inline constexpr double rayleighScatter[3] = {5.802e-3, 13.558e-3, 33.1e-3};
-inline constexpr double rayleighScaleHeight = 8.0;
-inline constexpr double mieScatter = 3.996e-3;
-inline constexpr double mieAbsorb = 4.40e-3;
-inline constexpr double mieScaleHeight = 1.2;
-inline constexpr double mieG = 0.8;
-inline constexpr double ozoneAbsorb[3] = {0.650e-3, 1.881e-3, 0.085e-3};
-inline constexpr double ozoneCenter = 25.0;    // tent profile: 1 at the centre, 0 at +-ozoneHalfWidth
-inline constexpr double ozoneHalfWidth = 15.0;
-inline constexpr int transmittanceSteps = 64;  // midpoint rule with quadratic spacing t = tMax * u^2
-inline constexpr double skyScale = 10.0;       // single-scatter radiance gain (stands in for multiple scattering)
-inline constexpr double sunAngularRadius = 0.0046690; // 0.2675 deg in radians
-// The sun's light fades out as the disk sinks: factor 0 at sunFadeLowDeg and below, 1 at sunFadeHighDeg and above
-// (smoothstep). Wide enough (about two disk diameters) that a running sunset never pops; full strength at the horizon.
-inline constexpr double sunFadeLowDeg = -0.95;
-inline constexpr double sunFadeHighDeg = 0.0;
-inline constexpr double nightFloor[3] = {0.0025, 0.0045, 0.0100}; // linear sky radiance at sun intensity 3
-// Auto exposure: 1 at >= exposureHighDeg, exp(ln(exposureMax) * smoothstep) down to exposureLowDeg and below.
-inline constexpr double exposureMax = 5.0;
-inline constexpr double exposureHighDeg = 30.0;
-inline constexpr double exposureLowDeg = -10.0;
+#define NRE_ATMOSPHERE_SCALAR(name, value) inline constexpr double name = value;
+#define NRE_ATMOSPHERE_RGB(name, r, g, b) inline constexpr double name[3] = {r, g, b};
+#define NRE_ATMOSPHERE_INT(name, value) inline constexpr int name = value;
+#include "lighting/atmosphere.inc"
+#undef NRE_ATMOSPHERE_SCALAR
+#undef NRE_ATMOSPHERE_RGB
+#undef NRE_ATMOSPHERE_INT
 } // namespace Atmosphere
 
 // RGB transmittance of the sun's light reaching a viewer 1.5 m above an Earth-sized planet (Rayleigh + Mie +
@@ -203,6 +187,13 @@ inline glm::vec3 sunTransmittance(float sunElevation) {
             depth[k] += (r * A::rayleighScatter[k] + m * (A::mieScatter + A::mieAbsorb) + o * A::ozoneAbsorb[k]) * dt;
     }
     return {float(fade * std::exp(-depth[0])), float(fade * std::exp(-depth[1])), float(fade * std::exp(-depth[2]))};
+}
+
+// The sun's elevation (radians above the horizon) for the way its light travels (setSun's direction).
+inline float sunElevation(glm::vec3 sunDirection) {
+    float len = glm::length(sunDirection);
+    if (!(len > 0.0f)) return -1.5707963f;   // no direction: as if straight down below the horizon
+    return std::asin(std::clamp(-sunDirection.y / len, -1.0f, 1.0f));
 }
 
 // Brightness compensation driven by the sun's elevation (radians): 1 from 30 degrees up, rising smoothly toward

@@ -46,7 +46,7 @@ namespace NRE {
         vkBeginCommandBuffer(cmd, &bi);
 
         const bool is3D = c->config.mode == RenderMode::Render_3D;
-        const float exposure = scene ? scene->exposure : 1.0f;
+        const float exposure = scene ? scene->frameExposure : 1.0f;   // setExposure x the automatic part (Landscape)
         const glm::vec3 sky = scene ? scene->skyColor : Scene::defaultSkyColor;
         // The sky colour is a display colour: expanded with the inverse tone curve and divided by the exposure, the
         // tone map turns it back into itself. 2D isn't tone mapped, so it's used as it is.
@@ -74,6 +74,9 @@ namespace NRE {
         const VkExtent2D hdrExtent = toneMap.hdrExtent();
         const bool haveHdr = toneMap.hdrImage() != VK_NULL_HANDLE && hdrExtent.width == extent.width && hdrExtent.height == extent.height;
 
+        // The procedural sky's cubemap for this frame slot, recomputed if the sun moved (compute, then a barrier to
+        // the fragment shaders that read it). Before the main pass, which samples it (sky pass, ambient).
+        if (haveHdr && scene && scene->skySource == SkySource::Procedural) v.sky.update(cmd, scene->sunDirection);
         // The sun's shadow maps, from the same draws (writeFrameData() set the cascades). Before the main pass, which
         // samples them.
         if (haveHdr && scene) v.shadowMaps.record(cmd, *scene, draws, scene->shadowCascades);
@@ -94,7 +97,7 @@ namespace NRE {
                     if (Model* model = c->manager.get(draw.model)) (void)model->draw(cmd, *pipeline, draw.matrix, cullMode);
                 }
                 // After the geometry, so the sky only fills what it left empty.
-                (void)scene->drawSkybox(cmd);
+                if (is3D) v.sky.draw(cmd, *scene);
             }
             vkCmdEndRendering(cmd);
             transition(cmd, toneMap.hdrImage(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);

@@ -12,6 +12,7 @@
 #include "core/frameRecorder.h"
 #include "post/toneMap.h"
 #include "lighting/shadows.h"
+#include "lighting/sky.h"
 namespace NRE {
     struct Frame {
         VkCommandPool pool;
@@ -61,7 +62,8 @@ namespace NRE {
         Handel<Material> defaultMaterial;
         // 1x1 black faces: what set 0 binding 2 shows while a scene has no skybox.
         Handel<Cubemap> defaultCubemap;
-        Handel<Pipeline> skyboxPipeline;
+        // The procedural sky and the sky pass (cubemap or procedural), shared by all scenes.
+        Sky sky;
         // The HDR scene target and the pass that tone maps it to the window / render target.
         ToneMapPass toneMap;
         // The sun's shadow maps (set 0 binding 3 of every scene), drawn before the main pass.

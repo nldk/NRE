@@ -772,6 +772,239 @@ NRE_SCENARIO(scene_lighting_defaults) {
     return true;
 }
 
+namespace {
+    // The way the light of a sun at elevationDeg above the horizon travels. The sun stands toward -z (in front of a
+    // camera with yaw 0), turned azimuthDeg toward +x.
+    glm::vec3 sunAt(float elevationDeg, float azimuthDeg = 0.0f) {
+        float e = glm::radians(elevationDeg), a = glm::radians(azimuthDeg);
+        glm::vec3 toSun{std::cos(e) * std::sin(a), std::sin(e), -std::cos(e) * std::cos(a)};
+        return -toSun;
+    }
+
+    // A Landscape scene with nothing in it but the sky: the sun at elevationDeg toward -z, the camera at the origin
+    // looking down -z with pitch 0 (the horizon is the middle row).
+    void setUpSkyScene(float elevationDeg, float azimuthDeg = 0.0f) {
+        bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+        TRY(setSceneLighting(SceneLighting::Landscape));
+        TRY(setSun(sunAt(elevationDeg, azimuthDeg), glm::vec3(1.0f), 3.0f));
+        TRY(setCameraPosition(glm::vec3(0.0f)));
+        TRY(setCameraRotation(0.0f, 0.0f));
+    }
+
+    glm::vec3 imageAverage(const Image& image) { return image.average(0, 0, image.width, image.height); }
+}
+
+// Landscape at noon: a clear blue sky overhead.
+NRE_SCENARIO(sky_noon) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(60.0f);
+    Image image = renderAndCapture();
+    saveCapture(image, "sky-noon.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 top = image.at(kWidth / 2, 0);
+    glm::vec3 horizon = image.average(0, kHeight / 2 - 6, kWidth, kHeight / 2 - 2);
+    std::printf("top centre (%.3f, %.3f, %.3f), above the horizon (%.3f, %.3f, %.3f)\n", top.r, top.g, top.b,
+                horizon.r, horizon.g, horizon.b);
+    CHECK(top.b > top.r && top.b > 0.4f);
+    CHECK(luminance(horizon) > luminance(top) + 0.05f);   // a paler band along the horizon
+    return true;
+}
+
+// The sun 2 degrees up, in front of the camera: the horizon next to it glows red.
+NRE_SCENARIO(sky_sunset) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(2.0f);
+    Image image = renderAndCapture();
+    saveCapture(image, "sky-sunset.png");
+    CHECK(!image.pixels.empty());
+    // Just above the horizon (the middle row), 20 px left of the sun.
+    glm::vec3 horizon = image.average(295, 234, 305, 238);
+    std::printf("horizon beside the sun (%.3f, %.3f, %.3f)\n", horizon.r, horizon.g, horizon.b);
+    CHECK(horizon.r > horizon.b);
+    return true;
+}
+
+// The sun 20 degrees below the horizon: a dim blue night, not black.
+NRE_SCENARIO(sky_night) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(-20.0f);
+    Image image = renderAndCapture();
+    saveCapture(image, "sky-night.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 average = imageAverage(image);
+    std::printf("frame average (%.3f, %.3f, %.3f), luminance %.4f\n", average.r, average.g, average.b, luminance(average));
+    CHECK(luminance(average) > 3.0f / 255.0f && luminance(average) < 0.15f);
+    CHECK(average.b >= average.r);
+    return true;
+}
+
+// Looking straight at the sun 30 degrees up: the disk saturates.
+NRE_SCENARIO(sun_disk) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(30.0f);
+    TRY(cameraLookAt(-sunAt(30.0f)));
+    Image image = renderAndCapture();
+    saveCapture(image, "sun-disk.png");
+    CHECK(!image.pixels.empty());
+    float centre = luminance(image.at(kWidth / 2, kHeight / 2));
+    // The disk is about 4 px across; 10 px off it is sky.
+    float beside = luminance(image.at(kWidth / 2 + 10, kHeight / 2));
+    std::printf("centre luminance %.3f, 10 px beside %.3f\n", centre, beside);
+    CHECK(centre > 0.9f);
+    CHECK(beside < centre);
+    return true;
+}
+
+// The sky follows the sun: after a big move both frames in flight show the new sky (each has its own cubemap), and
+// a move below the regeneration threshold keeps it.
+NRE_SCENARIO(sky_follows_sun) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(60.0f, 90.0f);   // to the right, out of view
+    Image noon = renderAndCapture();
+    Image noon2 = renderAndCapture();
+    TRY(setSunDirection(sunAt(10.0f, 90.0f)));
+    Image low = renderAndCapture();
+    Image low2 = renderAndCapture();
+    Image low3 = renderAndCapture();
+    TRY(setSunDirection(sunAt(10.1f, 90.0f)));
+    Image nudged = renderAndCapture();
+    Image nudged2 = renderAndCapture();
+    saveCapture(noon, "sky-follows-sun-60.png");
+    saveCapture(low, "sky-follows-sun-10.png");
+    CHECK(!noon.pixels.empty() && !noon2.pixels.empty() && !low.pixels.empty() && !low2.pixels.empty());
+    CHECK(!low3.pixels.empty() && !nudged.pixels.empty() && !nudged2.pixels.empty());
+    float moved = fractionDifferent(noon, low, 8.0f / 255.0f);
+    std::printf("changed by the 50 degree move: %.1f%%\n", moved * 100.0f);
+    CHECK(moved > 0.5f);
+    CHECK(fractionDifferent(noon, noon2, 1.0f / 255.0f) == 0.0f);
+    CHECK(fractionDifferent(low, low2, 1.0f / 255.0f) == 0.0f);
+    CHECK(fractionDifferent(low, low3, 1.0f / 255.0f) == 0.0f);
+    // 0.1 degrees: the cubemap isn't regenerated, only the automatic exposure follows the sun (by about 1%).
+    float nudgedChange = fractionDifferent(low, nudged, 3.0f / 255.0f);
+    std::printf("changed by the 0.1 degree move: %.3f%%\n", nudgedChange * 100.0f);
+    CHECK(nudgedChange < 0.01f);
+    CHECK(fractionDifferent(nudged, nudged2, 1.0f / 255.0f) == 0.0f);
+    return true;
+}
+
+// Through the day, facing the sun: golden hour, the horizon line at sunset, twilight and night. Never black, and the
+// horizon beside the sun gets redder as it sinks.
+NRE_SCENARIO(sky_elevations) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(15.0f);
+    float previousRatio = 0.0f;
+    for (float elevation : {15.0f, 5.0f, 0.0f, -4.0f, -10.0f}) {
+        TRY(setSunDirection(sunAt(elevation)));
+        Image image = renderAndCapture();
+        CHECK(!image.pixels.empty());
+        char file[64];
+        std::snprintf(file, sizeof(file), "sky-elevation-%+.0f.png", elevation);
+        saveCapture(image, file);
+        glm::vec3 sky = image.average(0, 0, kWidth, kHeight / 2);
+        glm::vec3 horizon = image.average(280, 232, 300, 238);
+        float ratio = horizon.r / std::max(horizon.b, 1e-3f);
+        std::printf("%+.0f deg: sky average (%.3f, %.3f, %.3f), horizon beside the sun (%.3f, %.3f, %.3f) r/b %.2f\n",
+                    elevation, sky.r, sky.g, sky.b, horizon.r, horizon.g, horizon.b, ratio);
+        CHECK(luminance(sky) > 3.0f / 255.0f);
+        if (elevation >= 0.0f) {
+            CHECK(ratio > previousRatio);
+            previousRatio = ratio;
+        } else {
+            CHECK(sky.b >= sky.r);   // twilight and night are blue overhead
+        }
+    }
+    return true;
+}
+
+// A white box on white ground in Landscape, the sun behind the camera: its sunlit face stays readable as the sun
+// goes down, and turns warmer.
+NRE_SCENARIO(lit_low_sun) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    auto cube = TRY(createModel(TEST_ASSET_DIR "/noUv.obj"));   // no material: white
+    auto ground = TRY(createInstance(cube));
+    TRY(setInstanceTransform(ground, Transform{{0.0f, -0.05f, 0.0f}, glm::identity<glm::quat>(), {400.0f, 0.1f, 400.0f}}));
+    TRY(addInstanceToScene(ground));
+    auto box = TRY(createInstance(cube));
+    TRY(setInstanceTransform(box, Transform{{0.0f, 0.5f, -3.0f}, glm::identity<glm::quat>(), glm::vec3(1.0f)}));
+    TRY(addInstanceToScene(box));
+    TRY(setCameraPosition({0.0f, 1.0f, 0.0f}));
+    TRY(cameraLookAt({0.0f, 0.5f, -3.0f}));
+    float previousRatio = 0.0f;
+    for (float elevation : {30.0f, 5.0f, 0.5f}) {
+        // Behind the camera, 30 degrees to its right: it lights the box's +z face, the one facing the camera.
+        TRY(setSun(sunAt(elevation, 150.0f), glm::vec3(1.0f), 3.0f));
+        Image image = renderAndCapture();
+        CHECK(!image.pixels.empty());
+        char file[64];
+        std::snprintf(file, sizeof(file), "lit-low-sun-%.1f.png", elevation);
+        saveCapture(image, file);
+        glm::vec2 p = toPixel({0.0f, 0.5f, -2.5f});   // the middle of the lit face
+        glm::vec3 face = image.average(uint32_t(p.x) - 20, uint32_t(p.y) - 20, uint32_t(p.x) + 20, uint32_t(p.y) + 20);
+        float ratio = face.r / std::max(face.b, 1e-3f);
+        std::printf("%.1f deg: lit face (%.3f, %.3f, %.3f), luminance %.3f, r/b %.2f\n", elevation, face.r, face.g, face.b,
+                    luminance(face), ratio);
+        CHECK(luminance(face) > 0.15f);
+        CHECK(ratio > previousRatio);
+        previousRatio = ratio;
+    }
+    return true;
+}
+
+// Two scenes bound in turn, a Landscape one with the procedural sky and a Small one with a red sky colour and a lit
+// box, each with its own exposure: every frame looks like its own scene rendered alone.
+NRE_SCENARIO(scene_switch) {
+    Session session(ApiMode::SceneMode);
+    Handel<Scene> a = TRY(getBoundScene());
+    setUpSkyScene(60.0f, 40.0f);
+    TRY(setExposure(1.5f));
+    Image aloneA = renderAndCapture();
+
+    Handel<Scene> b = TRY(createScene());
+    TRY(bindScene(b));
+    TRY(setSkyColor({0.8f, 0.1f, 0.1f}));
+    TRY(setExposure(0.5f));
+    placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));
+    setUpSun();
+    Image aloneB = renderAndCapture();
+    saveCapture(aloneA, "scene-switch-a.png");
+    saveCapture(aloneB, "scene-switch-b.png");
+    CHECK(!aloneA.pixels.empty() && !aloneB.pixels.empty());
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Small);
+    glm::vec3 red{srgbEncode(0.8f), srgbEncode(0.1f), srgbEncode(0.1f)};
+    CHECK(near(aloneB.at(10, 10), red, 2.0f / 255.0f));
+    CHECK(aloneA.at(kWidth / 2, 0).b > aloneA.at(kWidth / 2, 0).r);
+
+    for (int frame = 0; frame < 4; ++frame) {
+        bool sceneA = frame % 2 == 0;
+        TRY(bindScene(sceneA ? a : b));
+        Image image = renderAndCapture();
+        float differs = fractionDifferent(image, sceneA ? aloneA : aloneB, kGoldenTolerance);
+        std::printf("frame %d (scene %c): %.3f%% differs from the scene alone\n", frame, sceneA ? 'A' : 'B', differs * 100.0f);
+        CHECK(differs <= kGoldenMaxFraction);
+    }
+    // The exposure is the scene's own: lowering A's darkens A.
+    TRY(bindScene(a));
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Landscape);
+    TRY(setExposure(0.5f));
+    Image dimmerA = renderAndCapture();
+    CHECK(!dimmerA.pixels.empty());
+    CHECK(brightness(imageAverage(dimmerA)) < brightness(imageAverage(aloneA)) * 0.9f);
+    return true;
+}
+
+// Landscape with a cubemap sky: shown as authored, whatever the automatic exposure (the sun is low here, so it's
+// about 3).
+NRE_SCENARIO(skybox_landscape) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    TRY(setSun(sunAt(5.0f), glm::vec3(1.0f), 3.0f));
+    setUpClearDaySkybox();
+    return matchesGolden(renderAndCapture(), "skybox.png");
+}
+
 int main(int argc, char** argv) {
     return runScenarios(argc, argv);
 }

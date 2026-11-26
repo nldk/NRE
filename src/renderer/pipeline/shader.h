@@ -43,7 +43,7 @@ namespace NRE {
 
     // A built-in shader from SPIR-V embedded in librenderer (see CMakeLists.txt), in the resource manager while this
     // lives. A pipeline doesn't need its modules once it's made, so keep one only around the pipeline's creation:
-    //     BuiltinShader vertex(skyboxVert, ShaderType::VERTEX_SHADER);   // skyboxVert: the embedded words
+    //     BuiltinShader vertex(skyVert, ShaderType::VERTEX_SHADER);   // skyVert: the embedded words
     //     pipeline.createPipeline(vertex.handle, ...);
     struct BuiltinShader {
         Handel<Shader> handle;

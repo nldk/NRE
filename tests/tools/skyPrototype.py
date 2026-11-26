@@ -9,7 +9,7 @@ import sys
 import numpy as np
 from PIL import Image, ImageDraw
 
-# ---- Atmosphere constants (keep identical to NRE::LightingMath::Atmosphere in lightingMath.h) ----
+# ---- Atmosphere constants (keep identical to src/renderer/lighting/atmosphere.inc, shared by C++ and the shaders) ----
 PLANET_RADIUS = 6360.0            # km
 ATMOSPHERE_TOP = 6460.0           # km (radius of the top of the atmosphere)
 VIEWER_HEIGHT = 0.0015            # km (1.5 m)

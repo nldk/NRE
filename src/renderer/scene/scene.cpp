@@ -24,8 +24,14 @@ namespace NRE {
 
     void applyLightingDefaults(Scene& scene) {
         switch (scene.lighting) {
-            case SceneLighting::Small: scene.shadowDistance = 20.0f; break;
-            case SceneLighting::Landscape: scene.shadowDistance = 500.0f; break;
+            case SceneLighting::Small:
+                scene.shadowDistance = 20.0f;
+                scene.proceduralSky = false;
+                break;
+            case SceneLighting::Landscape:
+                scene.shadowDistance = 500.0f;
+                scene.proceduralSky = true;
+                break;
         }
     }
 
@@ -43,15 +49,31 @@ namespace NRE {
         fd.lightCount = uint32_t(gpuLights.size());
         fd.sunDirection = glm::vec4(sunDirection, 0.0f);
         fd.sunColor = glm::vec4(sunColor, sunIntensity);
-        Handel<Cubemap> sky = c->manager.get(skybox) ? skybox : Handel<Cubemap>{};
+        const bool is3D = c->config.mode == RenderMode::Render_3D;
+        const bool landscape = lighting == SceneLighting::Landscape;
+
+        // The sky: the skybox if there's one (a destroyed one counts as none), otherwise the mode's default.
+        const Handel<Cubemap> sky = c->manager.get(skybox) ? skybox : Handel<Cubemap>{};
+        if (sky != Handel<Cubemap>{}) skySource = SkySource::Cubemap;
+        else if (proceduralSky && is3D && c->vulkan.sky.ready()) skySource = SkySource::Procedural;
+        else skySource = SkySource::Color;
+
+        // The sun's light on objects. Landscape: through the atmosphere, which also fades it out as the disk sinks
+        // below the horizon (0 from -0.95 degrees down), and the exposure follows the sun's height.
+        const float elevation = LightingMath::sunElevation(sunDirection);
+        const glm::vec3 transmittance = landscape ? LightingMath::sunTransmittance(elevation) : glm::vec3(1.0f);
+        const glm::vec3 sunLight = sunColor * sunIntensity * transmittance;
+        const bool sunUp = sunIntensity > 0.0f && glm::any(glm::greaterThan(transmittance, glm::vec3(0.0f)));
+        frameExposure = exposure * (landscape ? LightingMath::autoExposure(elevation) : 1.0f);
+
         // Sun shadows (3D, with a sun): cascades splitting the view from the near plane to the shadow distance.
         const ShadowMaps& shadows = c->vulkan.shadowMaps;
         const VkExtent2D extent = sceneExtent(c);
         shadowCascades = 0;
         for (glm::mat4& m : fd.cascadeViewProj) m = glm::mat4(1.0f);
         fd.cascadeSplits = glm::vec4(0.0f);
-        // No sun (intensity 0), no sun shadows: the shadow pass is skipped.
-        if (c->config.mode == RenderMode::Render_3D && sunIntensity > 0.0f && shadows.ready()
+        // No sun (intensity 0, or set below the horizon), no sun shadows: the shadow pass is skipped.
+        if (is3D && sunUp && shadows.ready()
             && extent.width > 0 && extent.height > 0) {
             shadowCascades = std::min(LightingMath::cascadeCountFor(shadowDistance), shadows.layerCount());
         }
@@ -70,19 +92,24 @@ namespace NRE {
             fd.cascadeSplits = glm::vec4(splits[0], splits[1], splits[2], splits[3]);
         }
         fd.shadowParams = glm::vec4(float(shadowCascades), ShadowMaps::normalOffsetTexels, 0.0f, 0.0f);
-        // Neutral until the atmosphere, IBL and haze passes fill them: the plain sun colour, the sky colour as
-        // linear light (the same expansion the clear colour gets, without the exposure).
-        fd.sunRadiance = glm::vec4(sunColor * sunIntensity, sunIntensity > 0.0f ? 1.0f : 0.0f);
+        fd.sunRadiance = glm::vec4(sunLight, sunUp ? 1.0f : 0.0f);
+        // The sky colour as linear light (the same expansion the clear colour gets, without the exposure).
         fd.skyColor = glm::vec4(LightingMath::inverseToneMapACES(skyColor), 0.0f);
-        fd.skyParams = glm::vec4(sky == Handel<Cubemap>{} ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f);
+        // z: the procedural sky's brightness. Its cubemap holds the sky (night floor included) at the standard
+        // intensity, and the sky scales with the sun's intensity.
+        const float skyScale = skySource == SkySource::Procedural ? sunIntensity / float(LightingMath::Atmosphere::standardIntensity) : 0.0f;
+        fd.skyParams = glm::vec4(float(uint32_t(skySource)), 0.0f, skyScale, 0.0f);
         fd.hazeParams = glm::vec4(0.0f);
         if (auto r = UBO.write(frame, &fd, sizeof(fd)); !r) return r;
 
-        // The caller waited on this frame's fence, so its set is free to rewrite.
-        if (sky != skyboxInSet[frame]) {
-            Cubemap* cubemap = c->manager.get(sky == Handel<Cubemap>{} ? c->vulkan.defaultCubemap : sky);
-            if (auto r = writeImageDescriptor(frameSets[frame], 2, cubemap->getView(), c->vulkan.sampler); !r) return r;
-            skyboxInSet[frame] = sky;
+        // The caller waited on this frame's fence, so its set is free to rewrite. The procedural sky of frame slot f
+        // is always the Sky's cubemap f, the one only that slot's frames read and write.
+        const SkyBinding wanted{skySource == SkySource::Cubemap ? sky : Handel<Cubemap>{}, skySource == SkySource::Procedural};
+        if (wanted != skyInSet[frame]) {
+            VkImageView view = wanted.procedural ? c->vulkan.sky.cubemapView(frame)
+                             : c->manager.get(wanted.skybox == Handel<Cubemap>{} ? c->vulkan.defaultCubemap : wanted.skybox)->getView();
+            if (auto r = writeImageDescriptor(frameSets[frame], 2, view, c->vulkan.sampler); !r) return r;
+            skyInSet[frame] = wanted;
         }
         return Lights.write(frame, gpuLights.data(), gpuLights.size() * sizeof(GpuLight));
     }
@@ -103,31 +130,6 @@ namespace NRE {
             draw.matrix = instance->transform.matrix();
             draw.castsShadows = instance->castsShadows;
         }
-    }
-
-    Result<void> Scene::drawSkybox(VkCommandBuffer commandBuffer) {
-        auto c = context();
-        NRE_REQUIRE_CONTEXT(c);
-        if (c->config.mode != RenderMode::Render_3D || !c->manager.get(skybox)) return {};
-        Pipeline* pipeline = c->manager.get(c->vulkan.skyboxPipeline);
-        if (!pipeline) return {};   // init() failed to make it under RenderErrorPolicy::Ignore, and said so
-        uint32_t frame = c->vulkan.currentFrame % max_frames_in_flight;
-
-        // Maps (ndc.x, ndc.y, 1) to the world-space direction through that pixel: undo the projection's scale
-        // (x / P[0][0], y / P[1][1], looking down -z), then the camera's rotation. No translation: the sky is
-        // infinitely far away, so moving never brings it closer.
-        const glm::mat4& p = c->vulkan.projection;
-        glm::mat3 unproject(glm::vec3(1.0f / p[0][0], 0.0f, 0.0f), glm::vec3(0.0f, 1.0f / p[1][1], 0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
-        glm::mat3 cameraToWorld = glm::transpose(glm::mat3(camera.viewMatrix()));
-        // Matches the push constant block in shaders/skybox.vert.
-        struct { glm::mat4 rayMatrix; glm::vec4 params; } pc{glm::mat4(cameraToWorld * unproject), glm::vec4(1.0f / exposure, 0.0f, 0.0f, 0.0f)};
-
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
-        vkCmdSetCullMode(commandBuffer, VK_CULL_MODE_NONE);
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipelineLayout, 0, 1, &frameSets[frame], 0, nullptr);
-        vkCmdPushConstants(commandBuffer, pipeline->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
-        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-        return {};
     }
 
     Result<void> Scene::createUboAndLights() {

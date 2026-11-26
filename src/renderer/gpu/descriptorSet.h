@@ -38,4 +38,8 @@ namespace NRE {
     Result<void> writeImageDescriptor(VkDescriptorSet set, uint32_t binding, VkImageView view, VkSampler sampler,
                                       VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
+    // Points a storage-image binding at an image view, which compute shaders access in VK_IMAGE_LAYOUT_GENERAL.
+    // Only rewrite a set the GPU isn't currently using.
+    Result<void> writeStorageImageDescriptor(VkDescriptorSet set, uint32_t binding, VkImageView view);
+
 }
