@@ -679,7 +679,10 @@ NRE_SCENARIO(shadow_far) {
     return litMatchesUnshadowed(image, litSpot);
 }
 
-// Landscape: moving the camera 1 cm sideways doesn't make the shadows swim (the cascades are snapped to texels).
+// Landscape: moving the camera 1 cm sideways leaves the frame almost unchanged. That catches gross instability (e.g. a
+// cascade whose size or placement jumps when the camera moves), not sub-texel swimming: with 3x3 PCF an unsnapped
+// map shifted by a fraction of a texel changes too few pixels by too little to show here. Texel snapping is guarded
+// by cascadeStable in tests/lightingMathTest.cpp. Also checks the near cascades are sharp.
 NRE_SCENARIO(shadow_stable) {
     Session session(ApiMode::SceneMode);
     bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
