@@ -18,6 +18,8 @@ _deps/
 # Compiled binaries
 *.o
 *.obj
+# ...but keep the generated OBJ test models
+!tests/assets/*.obj
 *.so
 *.so.*
 *.a
