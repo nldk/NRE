@@ -9,6 +9,8 @@
 #include "renderer.h"
 #include "core/frames.h"
 #include "gpu/image.h"
+#include "core/frameRecorder.h"
+#include "post/toneMap.h"
 namespace NRE {
     struct Frame {
         VkCommandPool pool;
@@ -54,8 +56,15 @@ namespace NRE {
         // 1x1 black faces: what set 0 binding 2 shows while a scene has no skybox.
         Handel<Cubemap> defaultCubemap;
         Handel<Pipeline> skyboxPipeline;
-        // FunctionDrawMode: the scene renderFrame() bound the frame data of, so endFrame() draws its skybox.
+        // The HDR scene target and the pass that tone maps it to the window / render target.
+        ToneMapPass toneMap;
+        // What renderFrame() set up the frame with (the bound scene, whose frame data it wrote, and pipeline),
+        // so the frame recorded at endFrame() uses them even if others are bound in between.
         Handel<Scene> frameScene;
+        Handel<Pipeline> framePipeline;
+        // This frame's draws: FunctionDrawMode queues them between renderFrame() and endFrame(), SceneMode fills it
+        // from the scene. Cleared every frame; keeps its capacity.
+        std::vector<QueuedDraw> drawQueue;
         // FunctionDrawMode: true between renderFrame() and endFrame().
         bool isDrawing = false;
         // FunctionDrawMode: false when renderFrame() skipped the frame (swapchain out of date, no pipeline under
@@ -107,4 +116,7 @@ namespace NRE {
     // Rebuilds c->vulkan.projection for the size the scene is drawn at (the render target's, if there is one).
     // Defined in core/renderer.cpp.
     void updateProjection(Context* c);
+    // The size the scene is drawn at: the unsafe render target's if one is set, otherwise the window's.
+    // Defined in core/renderer.cpp.
+    VkExtent2D sceneExtent(Context* c);
 }

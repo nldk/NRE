@@ -105,7 +105,7 @@ namespace NRE::Unsafe {
 
         // Frames in flight may still be drawing into, or sampling, the old images.
         vkDeviceWaitIdle(c->vulkan.device);
-        // Same color and depth formats as the window, so the pipelines (built for those) can draw into it.
+        // Same color and depth formats as the window: the tone-map pass writes the scene into it like into the window.
         Image color, depth;
         // TRANSFER_SRC so it can also be copied out (screenshots, thumbnails).
         auto created = color.createImage(width, height, c->vulkan.swapchain.image_format,
@@ -115,6 +115,8 @@ namespace NRE::Unsafe {
         }
         // Under RenderErrorPolicy::Ignore a failed createImage returns success with no image; keep the old target then.
         if (!created || color.getImage() == VK_NULL_HANDLE || depth.getImage() == VK_NULL_HANDLE) return created;
+        // The scene is drawn into the HDR target first, at the same size, then tone mapped into this one.
+        if (auto hdr = c->vulkan.toneMap.resize({width, height}); !hdr) return hdr;
 
         u.targetColor = std::move(color);   // the move assignments free the old images
         u.targetDepth = std::move(depth);
@@ -131,7 +133,7 @@ namespace NRE::Unsafe {
         (void)u.targetColor.destroyImage();
         (void)u.targetDepth.destroyImage();
         updateProjection(c);
-        return {};
+        return c->vulkan.toneMap.resize(sceneExtent(c));   // back to the window's size
     }
 
     VkImage getRenderTargetImage() {

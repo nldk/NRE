@@ -12,6 +12,8 @@ namespace NRE {
         constexpr uint32_t maxScenes = 8;
         constexpr uint32_t frameSets = max_frames_in_flight * maxScenes;
         constexpr uint32_t materialSets = 64;
+        // The renderer's own passes (one combined image sampler each): the tone map's HDR input.
+        constexpr uint32_t builtInSets = 1;
     }
 
     Result<void> DescriptorSetLayout::createLayout(std::span<const VkDescriptorSetLayoutBinding> bindings) {
@@ -45,10 +47,10 @@ namespace NRE {
         VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         frameSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         frameSets},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialSets + frameSets},   // frame sets: the skybox
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialSets + frameSets + builtInSets},   // frame sets: the skybox
         };
         VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        pci.maxSets       = frameSets + materialSets;
+        pci.maxSets       = frameSets + materialSets + builtInSets;
         pci.poolSizeCount = 3;
         pci.pPoolSizes    = sizes;
         if (VkResult r = vkCreateDescriptorPool(c->vulkan.device, &pci, nullptr, &descriptorSetPool); r != VK_SUCCESS) {

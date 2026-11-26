@@ -91,6 +91,7 @@ namespace NRE {
         UnknownError,
         // Added after 0.1.0: new codes go at the end so the existing values don't change.
         LibraryLoadFailed,
+        InvalidArgument,
     };
     struct WindowConfig {
         int width,height;
@@ -143,6 +144,7 @@ namespace NRE {
             case ErrorCode::DescriptorCreationFailed: return "DescriptorCreationFailed";
             case ErrorCode::ShaderCreationFailed: return "ShaderCreationFailed";
             case ErrorCode::LibraryLoadFailed: return "LibraryLoadFailed";
+            case ErrorCode::InvalidArgument: return "InvalidArgument";
         }
         return "UnknownError. Not in enum.";
     }
@@ -289,6 +291,15 @@ namespace NRE {
     // Keeps the color and intensity, e.g. for a day/night cycle.
     RENDERER_API Result<void> setSunDirection(glm::vec3 direction);
     RENDERER_API Result<glm::vec3> getSunDirection();
+
+    // Tone mapping. Shaders write linear light (values above 1 are fine, and must not tone map themselves);
+    // at the end of the frame the renderer multiplies it by the exposure and maps it to the screen with the
+    // ACES curve. Render_2D isn't tone mapped: what the shaders write is what's shown.
+    // The bound scene's exposure: 2 is twice as bright, 0.5 half. Must be greater than 0. Default 1.
+    RENDERER_API Result<void> setExposure(float exposure);
+    // The bound scene's background where nothing is drawn and there's no skybox, as the colour it shows on screen
+    // (linear 0..1, at any exposure). Default {0.1, 0.3, 0.6}. A skybox likewise looks like its images at any exposure.
+    RENDERER_API Result<void> setSkyColor(glm::vec3 color);
 
     // Cubemaps and the skybox. A cubemap is six square images of the same size, one per side of a cube around
     // the camera, loaded as color (sRGB). The faces are in the OpenGL order, the one most skybox downloads name

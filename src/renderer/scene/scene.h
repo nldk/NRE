@@ -5,6 +5,7 @@
 #include "gpu/buffer.h"
 #include "renderer.h"
 #include "gpu/UBOAndSSBO.h"
+#include "core/frameRecorder.h"
 
 namespace NRE {
 
@@ -58,6 +59,11 @@ namespace NRE {
         glm::vec3 sunDirection = glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f));
         glm::vec3 sunColor{1.0f};
         float sunIntensity = 0.0f;
+        static constexpr glm::vec3 defaultSkyColor{0.1f, 0.3f, 0.6f};
+        // setExposure: multiplies the scene's light before tone mapping. Always > 0.
+        float exposure = 1.0f;
+        // setSkyColor: the background where nothing is drawn, as a display colour (looks the same at any exposure).
+        glm::vec3 skyColor = defaultSkyColor;
         void addInstance(Handel<Instance> instance);
         void removeInstance(Handel<Instance> instance);
         const std::vector<Handel<Instance>>& getInstances() const { return instances; }
@@ -65,12 +71,15 @@ namespace NRE {
         void addLight(Handel<Light> light);
         void removeLight(Handel<Light> light);
         const std::vector<Handel<Light>>& getLights() const { return lights; }
-        // Writes this frame's camera + lights and binds the bound pipeline and set 0. Draws nothing.
-        Result<void> bindFrameData(VkCommandBuffer commandBuffer);
-        // bindFrameData, then every visible instance.
-        Result<void> draw(VkCommandBuffer commandBuffer);
+        // Writes this frame's camera + lights (and points set 0 at the skybox). Only once this frame's fence has
+        // been waited on: the GPU may still be reading the previous contents until then.
+        Result<void> writeFrameData();
+        // Binds pipeline and this frame's set 0 (written by writeFrameData()).
+        void bindFrameData(VkCommandBuffer commandBuffer, const Pipeline& pipeline);
+        // A draw for every visible instance.
+        void appendDraws(std::vector<QueuedDraw>& out) const;
         // Draws the skybox behind everything drawn so far, if the scene has one (3D only). Binds the skybox
-        // pipeline, so draw it last. Needs bindFrameData() earlier in the same frame.
+        // pipeline, so draw it last. Needs writeFrameData() earlier in the same frame.
         Result<void> drawSkybox(VkCommandBuffer commandBuffer);
         Result<void> createUboAndLights();
     };

@@ -1,7 +1,7 @@
 #version 450
-// Physically based lighting (the metallic-roughness model glTF uses): GGX specular + Lambert diffuse,
-// ACES tone mapping. Color math is linear: the texture is SRGB (decoded on sampling) and the swapchain
-// is SRGB (encoded on write).
+// Physically based lighting (the metallic-roughness model glTF uses): GGX specular + Lambert diffuse.
+// Color math is linear: the texture is SRGB (decoded on sampling), and the output is linear HDR light that
+// the renderer tone maps (with the scene's exposure) at the end of the frame, so don't tone map here.
 layout(location = 0) in vec3 inNormal;
 layout(location = 1) in vec2 inUV;
 layout(location = 2) in vec3 inWorldPos;
@@ -39,11 +39,6 @@ float visibilitySmith(float NdotV, float NdotL, float a) {
 vec3 fresnelSchlick(float VdotH, vec3 F0) {
     return F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
 }
-// Squashes HDR values into 0..1 without clipping (Narkowicz's ACES fit).
-vec3 toneMapACES(vec3 x) {
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
-}
-
 void main() {
     vec3 albedo = texture(baseTexture, inUV).rgb;
     float metallic = 0.0;    // later: from the material (glTF metallicRoughness texture/factors)
@@ -87,5 +82,5 @@ void main() {
     vec3 ambient = mix(vec3(0.02, 0.02, 0.025), vec3(0.06, 0.07, 0.09), N.y * 0.5 + 0.5);
     color += ambient * albedo * (1.0 - metallic * 0.5);
 
-    outColor = vec4(toneMapACES(color), 1.0);
+    outColor = vec4(color, 1.0);
 }

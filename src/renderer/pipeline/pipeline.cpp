@@ -5,7 +5,8 @@
 
 namespace NRE {
     Result<void> Pipeline::createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader, const VertexLayout& layout,
-                                          VkCullModeFlags cullMode, VkCompareOp depthCompare, bool depthWrite) {
+                                          VkCullModeFlags cullMode, VkCompareOp depthCompare, bool depthWrite,
+                                          VkFormat colorFormat) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         auto vertex = c->manager.get(vertexShader);
@@ -88,7 +89,6 @@ namespace NRE {
             return {};
         }
 
-        VkFormat colorFormat = c->vulkan.swapchain.image_format;
         VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
         rci.colorAttachmentCount = 1;
         rci.pColorAttachmentFormats = &colorFormat;

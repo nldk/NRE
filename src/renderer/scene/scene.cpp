@@ -20,16 +20,9 @@ namespace NRE {
     void Scene::removeLight(Handel<Light> light) {
         std::erase(lights, light);
     }
-    Result<void> Scene::bindFrameData(VkCommandBuffer commandBuffer) {
+    Result<void> Scene::writeFrameData() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
-        auto pipeline = c->manager.get(c->vulkan.pipelineBound);
-        if (!pipeline) {
-            auto error = Error{ErrorCode::NoPipelineBound, "Scene::bindFrameData(): no pipeline is bound. "
-                               "Create one with createPipeline() and bind it with bindPipeline()."};
-            if (ErrorHandeling::handleError(error)) return std::unexpected(error);
-            return {};
-        }
         uint32_t frame = c->vulkan.currentFrame % max_frames_in_flight;
         gpuLights.clear();
         for (Handel<Light> handle : lights) {
@@ -50,25 +43,22 @@ namespace NRE {
             if (auto r = writeImageDescriptor(frameSets[frame], 2, cubemap->getView(), c->vulkan.sampler); !r) return r;
             skyboxInSet[frame] = sky;
         }
-        if (auto r = Lights.write(frame, gpuLights.data(), gpuLights.size() * sizeof(GpuLight)); !r) return r;
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipelineLayout,0,1,&frameSets[frame],0,nullptr);
-        return {};
+        return Lights.write(frame, gpuLights.data(), gpuLights.size() * sizeof(GpuLight));
     }
 
-    Result<void> Scene::draw(VkCommandBuffer commandBuffer) {
-        if (auto r = bindFrameData(commandBuffer); !r) return r;
+    void Scene::bindFrameData(VkCommandBuffer commandBuffer, const Pipeline& pipeline) {
+        uint32_t frame = context()->vulkan.currentFrame % max_frames_in_flight;
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipelineLayout, 0, 1, &frameSets[frame], 0, nullptr);
+    }
+
+    void Scene::appendDraws(std::vector<QueuedDraw>& out) const {
         auto c = context();
-        Pipeline* pipeline = c->manager.get(c->vulkan.pipelineBound);
-        if (!pipeline) return {};   // bindFrameData already reported it (RenderErrorPolicy::Ignore)
-        for (Handel<Instance> instanceHandel : instances) {
-            Instance* instance = c->manager.get(instanceHandel);
+        for (Handel<Instance> handle : instances) {
+            Instance* instance = c->manager.get(handle);
             if (!instance || !instance->visible) continue;
-            Model* model = c->manager.get(instance->model);
-            if (!model) continue;
-            (void)model->draw(commandBuffer,*pipeline,instance->transform.matrix());
+            out.push_back({instance->model, instance->transform.matrix(), true});
         }
-        return {};
     }
 
     Result<void> Scene::drawSkybox(VkCommandBuffer commandBuffer) {
@@ -85,11 +75,12 @@ namespace NRE {
         const glm::mat4& p = c->vulkan.projection;
         glm::mat3 unproject(glm::vec3(1.0f / p[0][0], 0.0f, 0.0f), glm::vec3(0.0f, 1.0f / p[1][1], 0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
         glm::mat3 cameraToWorld = glm::transpose(glm::mat3(camera.viewMatrix()));
-        PushConstants pc{glm::mat4(cameraToWorld * unproject), glm::mat4(1.0f)};
+        // Matches the push constant block in shaders/skybox.vert.
+        struct { glm::mat4 rayMatrix; glm::vec4 params; } pc{glm::mat4(cameraToWorld * unproject), glm::vec4(1.0f / exposure, 0.0f, 0.0f, 0.0f)};
 
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipelineLayout, 0, 1, &frameSets[frame], 0, nullptr);
-        vkCmdPushConstants(commandBuffer, pipeline->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &pc);
+        vkCmdPushConstants(commandBuffer, pipeline->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
         return {};
     }

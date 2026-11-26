@@ -27,7 +27,8 @@ namespace NRE::Unsafe {
     RENDERER_API VkQueue getGraphicsQueue();
     RENDERER_API uint32_t getGraphicsQueueFamily();
     RENDERER_API VmaAllocator_T* getAllocator();
-    // Called every frame inside a render pass on the window, after the scene: bind your own pipeline and state.
+    // Called every frame inside a render pass on the window (swapchain format, with the window's depth buffer), after
+    // the tone-mapped scene is there: bind your own pipeline and state.
     // With a render target set, the window pass only contains what the callback draws. Pass nullptr to remove it.
     // Depth is reverse-Z: cleared to 0, nearer is greater, so depth-tested pipelines must use VK_COMPARE_OP_GREATER.
     RENDERER_API Result<void> registerFrameCallback(void (*frameCallback)(VkCommandBuffer commandBuffer));
@@ -41,7 +42,7 @@ namespace NRE::Unsafe {
     RENDERER_API Result<void> setRenderTarget(uint32_t width, uint32_t height);
     // Back to drawing the scene straight to the window. Frees the texture.
     RENDERER_API Result<void> clearRenderTarget();
-    // VK_NULL_HANDLE / {0, 0} while there's no render target. The format is the swapchain's, which the pipelines use.
+    // VK_NULL_HANDLE / {0, 0} while there's no render target. The format is the swapchain's: it holds the tone-mapped scene.
     // The image also has TRANSFER_SRC usage, so it can be copied out (e.g. for a screenshot).
     RENDERER_API VkImage getRenderTargetImage();
     RENDERER_API VkImageView getRenderTargetView();
