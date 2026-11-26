@@ -134,6 +134,14 @@ inline std::array<float, 4> cascadeSplits(float nearPlane, float shadowDistance,
     return s;
 }
 
+// Where the blend from cascade i into cascade i + 1 starts: the last 10% of cascade i (which begins at the previous
+// split, or 0 for the first). nreSunShadow in nre/lighting.glsl uses the same band; the next cascade's slice must
+// start here so it covers the band.
+inline float cascadeBlendStart(const std::array<float, 4>& splits, uint32_t i) {
+    float begin = i > 0 ? splits[i - 1] : 0.0f;
+    return splits[i] - 0.1f * (splits[i] - begin);
+}
+
 // ---- Atmosphere ------------------------------------------------------------------------------------------------
 // Settled with tests/tools/skyPrototype.py (see docs/superpowers/notes/2026-11-26-sky-prototype.md). The Task 8
 // shaders (transmittanceLut.comp and the sky) copy these values. Lengths are kilometres, coefficients 1/km.

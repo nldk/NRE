@@ -60,6 +60,15 @@ namespace NRE {
         SceneMode,
         FunctionDrawMode,
     };
+    // A scene's lighting mode (setSceneLighting).
+    enum class SceneLighting {
+        // Default; today's behaviour. Sky: the scene's cubemap, else the sky colour. One sharp shadow map over a short
+        // distance, no haze, exposure is exactly setExposure.
+        Small,
+        // Procedural sky computed from the sun, sky-lit ambient and reflections, cascaded shadows reaching far, haze,
+        // and an automatic exposure that follows the sun's height (setExposure multiplies on top).
+        Landscape,
+    };
     enum class ErrorCode {
         UnsupportedGPU,
         ErrorCreatingVulkanInstance,
@@ -289,8 +298,15 @@ namespace NRE {
     // Keeps the color and intensity, e.g. for a day/night cycle.
     RENDERER_API Result<void> setSunDirection(glm::vec3 direction);
     RENDERER_API Result<glm::vec3> getSunDirection();
+    // Switches the bound scene's mode and resets shadow distance, haze and the sky to that mode's defaults:
+    //   Small:     shadows 20 m, haze off,                    sky = cubemap if set, else the sky colour
+    //   Landscape: shadows 500 m, haze visibility 8000 m,     sky = procedural (or the cubemap if set)
+    // The sun, lights, exposure and sky colour are kept.
+    RENDERER_API Result<void> setSceneLighting(SceneLighting lighting);
+    RENDERER_API Result<SceneLighting> getSceneLighting();
     // How far from the camera the bound scene's sun casts shadows, in metres. 0 turns sun shadows off; must not be
-    // negative. Default 20. Shorter distances give sharper shadows. Only the sun casts shadows, and only in Render_3D.
+    // negative. Default 20 (setSceneLighting resets it). The number of cascades follows from it (up to 4); shorter
+    // distances give sharper shadows. Only the sun casts shadows, and only in Render_3D.
     RENDERER_API Result<void> setShadowDistance(float meters);
     // Whether an instance casts sun shadows (it still receives them). Default true; e.g. off for grass, for speed.
     // drawModel() always casts.

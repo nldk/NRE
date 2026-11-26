@@ -1039,6 +1039,26 @@ namespace NRE {
         return getBoundScenePtr().transform([](Scene* s) { return s->sunDirection; });
     }
 
+    Result<void> setSceneLighting(SceneLighting lighting) {
+        auto s = getBoundScenePtr();
+        if (!s) return std::unexpected(s.error());
+#ifndef NDEBUG
+        if (lighting != SceneLighting::Small && lighting != SceneLighting::Landscape) {
+            auto error = Error{ErrorCode::InvalidArgument, "setSceneLighting(): not a SceneLighting value: "
+                               + std::to_string(int(lighting)) + ". Use SceneLighting::Small or SceneLighting::Landscape."};
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);
+        }
+#endif
+        (*s)->lighting = lighting;
+        applyLightingDefaults(**s);
+        return {};
+    }
+
+    Result<SceneLighting> getSceneLighting() {
+        return getBoundScenePtr().transform([](Scene* s) { return s->lighting; });
+    }
+
     Result<void> setShadowDistance(float meters) {
         auto s = getBoundScenePtr();
         if (!s) return std::unexpected(s.error());

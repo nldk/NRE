@@ -114,6 +114,17 @@ static void cascadeStable() {
     }
 }
 
+// The blend band from cascade i into i + 1 is the last 10% of cascade i, inside its range.
+static void cascadeBlendBand() {
+    auto s = cascadeSplits(0.1f, 500.0f, 4);
+    CHECK_NEAR(cascadeBlendStart(s, 0), 0.9f * s[0], 1e-3);
+    for (uint32_t i = 1; i < 4; ++i) {
+        float start = cascadeBlendStart(s, i);
+        CHECK(start > s[i - 1] && start < s[i]);
+        CHECK_NEAR(s[i] - start, 0.1f * (s[i] - s[i - 1]), 1e-3);
+    }
+}
+
 // The shadow pass relies on depth clamping: casters sunward of the tight near plane project in front of it (z < 0)
 // but stay inside the map in xy.
 static void cascadeCasterClampsToNearPlane() {
@@ -190,6 +201,7 @@ int main() {
     cascadeViewProjVerticalSun();
     cascadeSplitsIncreasing();
     cascadeStable();
+    cascadeBlendBand();
     cascadeCasterClampsToNearPlane();
     transmittanceZenithBrighter();
     sunsetRed();

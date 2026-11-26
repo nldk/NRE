@@ -67,6 +67,8 @@ namespace NRE {
         float exposure = 1.0f;
         // setSkyColor: the background where nothing is drawn, as a display colour (looks the same at any exposure).
         glm::vec3 skyColor = defaultSkyColor;
+        // setSceneLighting: picks the defaults applyLightingDefaults() resets the settings below to.
+        SceneLighting lighting = SceneLighting::Small;
         // setShadowDistance: how far from the camera the sun casts shadows, in metres. 0 = no sun shadows. Never negative.
         float shadowDistance = 20.0f;
         // Sun shadow cascades this frame (0 = none), set by writeFrameData() with their matrices; the shadow pass draws
@@ -91,4 +93,8 @@ namespace NRE {
         Result<void> drawSkybox(VkCommandBuffer commandBuffer);
         Result<void> createUboAndLights();
     };
+
+    // Resets the scene's per-mode settings to the defaults of scene.lighting (setSceneLighting): the shadow
+    // distance (Small 20 m, Landscape 500 m). The sun, lights, exposure and sky colour are kept.
+    void applyLightingDefaults(Scene& scene);
 }

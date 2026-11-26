@@ -36,6 +36,8 @@ const float NRE_PI = 3.14159265;
 struct Surface {
     vec3  position;    // world space
     vec3  normal;      // world space, normal map applied, flipped for back faces of double-sided materials
+    vec3  geometricNormal;   // world space, the interpolated vertex normal (no normal map), flipped like normal.
+                             // The shadow lookup offsets along it: a normal map could tilt it into the surface.
     vec3  view;        // unit vector from the surface toward the camera
     vec3  albedo;      // linear
     float alpha;
@@ -51,14 +53,17 @@ vec3 nreShade(Surface s);
 
 // The pieces nreShade is made of, for custom looks:
 vec3  nreSunLight(Surface s);                     // direct sun, BRDF x shadow x atmosphere tint
-float nreSunShadow(vec3 worldPos, vec3 normal);   // 0 = fully shadowed, 1 = lit (PCF, cascade blending)
+float nreSunShadow(vec3 worldPos, vec3 normal);   // 0 = fully shadowed, 1 = lit (PCF, cascade blending).
+                                                  // normal: the geometric one (Surface.geometricNormal), not the
+                                                  // normal-mapped one; the lookup is offset along it
 vec3  nreSunToLight();                            // unit vector toward the sun
 vec3  nreSunRadiance();                           // sun colour x intensity x atmosphere tint
 vec3  nreLights(Surface s);                       // point + directional lights, unshadowed
 vec3  nreAmbient(Surface s);                      // sky diffuse + specular reflections
 vec3  nreBRDF(Surface s, vec3 toLight, vec3 radiance);   // GGX + Lambert, for your own lights
 vec3  nreApplyHaze(vec3 color, vec3 worldPos);
-vec3  nreCascadeDebugColor(vec3 worldPos);        // tints each cascade, for tuning
+vec3  nreCascadeDebugColor(vec3 worldPos);        // tints each cascade, for tuning: red, green, blue, yellow
+                                                  // (white beyond the shadow distance). Multiply your colour by it
 
 // ---- Implementation --------------------------------------------------------------------------------------------
 // Names starting with nre_ are internal and may change.
@@ -121,6 +126,7 @@ Surface nreMaterialSurface(vec3 worldPos, vec3 vertexNormal, vec2 uv) {
         if (!gl_FrontFacing) n = -n;
     }
     n = normalize(n);
+    vec3 geometric = n;
 
     // Normal map, in a tangent frame built from the screen-space derivatives of position and UV (no vertex
     // tangents needed). Without usable UVs (none, or degenerate) the UV derivatives' determinant is ~0: the
@@ -142,8 +148,9 @@ Surface nreMaterialSurface(vec3 worldPos, vec3 vertexNormal, vec2 uv) {
             if (dot(perturbed, perturbed) > 1e-12) n = normalize(perturbed);
         }
     }
-    if ((nreMaterial.flags & NRE_MATERIAL_DOUBLE_SIDED) != 0u && !gl_FrontFacing) n = -n;
-    s.normal = n;
+    bool backFace = (nreMaterial.flags & NRE_MATERIAL_DOUBLE_SIDED) != 0u && !gl_FrontFacing;
+    s.normal = backFace ? -n : n;
+    s.geometricNormal = backFace ? -geometric : geometric;
 
     if ((nreMaterial.flags & NRE_MATERIAL_ALPHA_MASK) != 0u && s.alpha < nreMaterial.alphaCutoff) discard;
     return s;
@@ -174,21 +181,34 @@ vec3 nreSunRadiance() {
     return nreFrame.sunColor.rgb * nreFrame.sunColor.w;
 }
 
-float nreSunShadow(vec3 worldPos, vec3 normal) {
-    uint count = uint(nreFrame.shadowParams.x);
-    if (count == 0u) return 1.0;
-    // Distance along the camera's view direction: the clip-space w of its perspective projection.
-    float viewDepth = (nreFrame.viewProj * vec4(worldPos, 1.0)).w;
-    float shadowEnd = nreFrame.cascadeSplits[count - 1u];
-    if (viewDepth >= shadowEnd) return 1.0;
+// Where the blend from cascade i into cascade i + 1 starts: the last 10% of cascade i. Must match
+// LightingMath::cascadeBlendStart (the next cascade's slice starts there).
+float nre_cascadeBlendStart(uint i) {
+    float begin = i > 0u ? nreFrame.cascadeSplits[i - 1u] : 0.0;
+    return nreFrame.cascadeSplits[i] - 0.1 * (nreFrame.cascadeSplits[i] - begin);
+}
+
+// The first cascade whose range reaches viewDepth (the caller checks it's inside the shadow distance).
+uint nre_cascadeAt(float viewDepth, uint count) {
     uint cascade = 0u;
+    while (cascade + 1u < count && viewDepth >= nreFrame.cascadeSplits[cascade]) ++cascade;
+    return cascade;
+}
+
+// Distance along the camera's view direction: the clip-space w of its perspective projection.
+float nre_viewDepth(vec3 worldPos) {
+    return (nreFrame.viewProj * vec4(worldPos, 1.0)).w;
+}
+
+// 0..1 lit, from one cascade's map, with 3x3 PCF.
+float nre_cascadeShadow(vec3 worldPos, vec3 normal, uint cascade) {
     mat4 lightViewProj = nreFrame.cascadeViewProj[cascade];
 
     // Normal offset: look up a point slightly off the surface, so it doesn't shadow itself (acne). Measured in
     // texels of this cascade: the orthographic projection scales light-space x by 2 / (the cascade's width).
     vec2 mapSize = vec2(textureSize(nreShadowMap, 0).xy);
     float texelWorld = 2.0 / (length(vec3(lightViewProj[0][0], lightViewProj[1][0], lightViewProj[2][0])) * mapSize.x);
-    vec3 p = worldPos + normalize(normal) * (nreFrame.shadowParams.y * texelWorld);
+    vec3 p = worldPos + normal * (nreFrame.shadowParams.y * texelWorld);
 
     // Orthographic (w = 1), standard depth (0 at the light) and no Y flip: uv = ndc.xy * 0.5 + 0.5.
     vec3 ndc = (lightViewProj * vec4(p, 1.0)).xyz;
@@ -196,21 +216,43 @@ float nreSunShadow(vec3 worldPos, vec3 normal) {
     vec2 uv = ndc.xy * 0.5 + 0.5;
     float depth = max(ndc.z, 0.0);  // sunward of the near plane: casters there were clamped to 0 too
 
-    // 3x3 PCF; each tap is itself a bilinear 2x2 comparison. Outside the map the border is lit.
+    // 3x3 PCF; each tap is itself a bilinear 2x2 comparison. Outside the map the border is lit. Zero gradients:
+    // the map has one mip level, and this runs in non-uniform control flow, where implicit derivatives aren't defined.
     vec2 texel = 1.0 / mapSize;
     float lit = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
-            lit += texture(nreShadowMap, vec4(uv + vec2(x, y) * texel, float(cascade), depth));
+            lit += textureGrad(nreShadowMap, vec4(uv + vec2(x, y) * texel, float(cascade), depth), vec2(0.0), vec2(0.0));
         }
     }
-    lit /= 9.0;
-    // Fades out over the last 10% of the shadow distance instead of ending at a line.
+    return lit / 9.0;
+}
+
+float nreSunShadow(vec3 worldPos, vec3 normal) {
+    uint count = uint(nreFrame.shadowParams.x);
+    if (count == 0u) return 1.0;
+    float viewDepth = nre_viewDepth(worldPos);
+    float shadowEnd = nreFrame.cascadeSplits[count - 1u];
+    if (viewDepth >= shadowEnd) return 1.0;
+    normal = normalize(normal);
+
+    uint cascade = nre_cascadeAt(viewDepth, count);
+    float lit = nre_cascadeShadow(worldPos, normal, cascade);
+    if (cascade + 1u < count) {
+        // Over the last 10% of a cascade, blend into the next one so the switch doesn't show as a line. Only
+        // there: everywhere else it's one lookup.
+        float blendStart = nre_cascadeBlendStart(cascade);
+        if (viewDepth > blendStart) {
+            float t = (viewDepth - blendStart) / (nreFrame.cascadeSplits[cascade] - blendStart);
+            lit = mix(lit, nre_cascadeShadow(worldPos, normal, cascade + 1u), t);
+        }
+    }
+    // The last cascade fades out over the last 10% of the shadow distance instead of ending at a line.
     return mix(lit, 1.0, smoothstep(0.9 * shadowEnd, shadowEnd, viewDepth));
 }
 
 vec3 nreSunLight(Surface s) {
-    return nreBRDF(s, nreSunToLight(), nreSunRadiance()) * nreSunShadow(s.position, s.normal);
+    return nreBRDF(s, nreSunToLight(), nreSunRadiance()) * nreSunShadow(s.position, s.geometricNormal);
 }
 
 vec3 nreLights(Surface s) {
@@ -264,7 +306,12 @@ vec3 nreApplyHaze(vec3 color, vec3 worldPos) {
 }
 
 vec3 nreCascadeDebugColor(vec3 worldPos) {
-    return vec3(1.0);
+    // The cascade nreSunShadow starts from (blend bands aren't shown).
+    uint count = uint(nreFrame.shadowParams.x);
+    float viewDepth = nre_viewDepth(worldPos);
+    if (count == 0u || viewDepth >= nreFrame.cascadeSplits[count - 1u]) return vec3(1.0);
+    const vec3 tints[4] = vec3[4](vec3(1.0, 0.25, 0.25), vec3(0.25, 1.0, 0.25), vec3(0.25, 0.25, 1.0), vec3(1.0, 1.0, 0.25));
+    return tints[nre_cascadeAt(viewDepth, count)];
 }
 
 vec3 nreShade(Surface s) {

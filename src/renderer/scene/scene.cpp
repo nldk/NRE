@@ -21,6 +21,14 @@ namespace NRE {
     void Scene::removeLight(Handel<Light> light) {
         std::erase(lights, light);
     }
+
+    void applyLightingDefaults(Scene& scene) {
+        switch (scene.lighting) {
+            case SceneLighting::Small: scene.shadowDistance = 20.0f; break;
+            case SceneLighting::Landscape: scene.shadowDistance = 500.0f; break;
+        }
+    }
+
     Result<void> Scene::writeFrameData() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
@@ -36,7 +44,7 @@ namespace NRE {
         fd.sunDirection = glm::vec4(sunDirection, 0.0f);
         fd.sunColor = glm::vec4(sunColor, sunIntensity);
         Handel<Cubemap> sky = c->manager.get(skybox) ? skybox : Handel<Cubemap>{};
-        // Sun shadows (3D, with a sun): one cascade covering the view from the near plane to the shadow distance.
+        // Sun shadows (3D, with a sun): cascades splitting the view from the near plane to the shadow distance.
         const ShadowMaps& shadows = c->vulkan.shadowMaps;
         const VkExtent2D extent = sceneExtent(c);
         shadowCascades = 0;
@@ -45,13 +53,21 @@ namespace NRE {
         // No sun (intensity 0), no sun shadows: the shadow pass is skipped.
         if (c->config.mode == RenderMode::Render_3D && sunIntensity > 0.0f && shadows.ready()
             && extent.width > 0 && extent.height > 0) {
-            shadowCascades = std::min(LightingMath::cascadeCountFor(shadowDistance), 1u);
+            shadowCascades = std::min(LightingMath::cascadeCountFor(shadowDistance), shadows.layerCount());
         }
         if (shadowCascades > 0) {
             const float aspect = float(extent.width) / float(extent.height);
-            auto corners = LightingMath::frustumSliceCorners(camera.viewMatrix(), Camera::fovY, aspect, Camera::nearPlane, shadowDistance);
-            fd.cascadeViewProj[0] = LightingMath::cascadeViewProj(corners, sunDirection, shadows.resolution());
-            fd.cascadeSplits = glm::vec4(shadowDistance);
+            const glm::mat4 view = camera.viewMatrix();
+            const auto splits = LightingMath::cascadeSplits(Camera::nearPlane, shadowDistance, shadowCascades);
+            float sliceNear = Camera::nearPlane;
+            for (uint32_t i = 0; i < shadowCascades; ++i) {
+                auto corners = LightingMath::frustumSliceCorners(view, Camera::fovY, aspect, sliceNear, splits[i]);
+                fd.cascadeViewProj[i] = LightingMath::cascadeViewProj(corners, sunDirection, shadows.resolution());
+                // nreSunShadow blends cascade i into the next over the last 10% of cascade i, so the next one starts
+                // there (the same band as in the shader).
+                sliceNear = LightingMath::cascadeBlendStart(splits, i);
+            }
+            fd.cascadeSplits = glm::vec4(splits[0], splits[1], splits[2], splits[3]);
         }
         fd.shadowParams = glm::vec4(float(shadowCascades), ShadowMaps::normalOffsetTexels, 0.0f, 0.0f);
         // Neutral until the atmosphere, IBL and haze passes fill them: the plain sun colour, the sky colour as

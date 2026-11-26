@@ -46,5 +46,7 @@ namespace NRE {
         VkImageView arrayView() const { return array; }
         VkSampler sampler() const { return compareSampler; }
         uint32_t resolution() const { return size; }
+        // How many cascades it can hold (0 if create() failed).
+        uint32_t layerCount() const { return layers; }
     };
 }

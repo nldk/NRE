@@ -3,6 +3,7 @@
 #include "capture.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -486,6 +487,20 @@ namespace {
         std::filesystem::create_directories(outDir());
         savePng(image, outDir() + "/" + file);
     }
+
+    // Shadows must not darken what the sun reaches (mild acne, a lit side dimmed by the lookup): litSpot in image
+    // is within 3% of the same spot rendered again with sun shadows off. Leaves the shadow distance at 0.
+    bool litMatchesUnshadowed(const Image& image, glm::vec3 litSpot, const std::function<void()>& draws = {}) {
+        CHECK(!image.pixels.empty());
+        TRY(setShadowDistance(0.0f));
+        Image unshadowed = renderAndCapture(draws);
+        CHECK(!unshadowed.pixels.empty());
+        float lit = spotLuminance(image, litSpot), reference = spotLuminance(unshadowed, litSpot);
+        std::printf("lit spot %.4f, same spot without shadows %.4f\n", lit, reference);
+        CHECK(lit > 0.0f && reference > 0.0f);
+        CHECK(std::abs(lit - reference) <= 0.03f * reference);
+        return true;
+    }
 }
 
 // A box on the ground casts the sun's shadow (SceneMode, default shadow distance).
@@ -495,7 +510,8 @@ NRE_SCENARIO(shadow_basic) {
     setUpShadowScene(true);
     Image image = renderAndCapture();
     saveCapture(image, "shadow-basic.png");
-    return hasBoxShadow(image, "scene");
+    if (!hasBoxShadow(image, "scene")) return false;
+    return litMatchesUnshadowed(image, kLitSpot);
 }
 
 // The same scene in FunctionDrawMode: queued through drawInstance, then through drawModel.
@@ -588,6 +604,168 @@ NRE_SCENARIO(shadow_noon) {
     CHECK(std::isfinite(below) && std::isfinite(lit));
     CHECK(below >= 0.0f && lit > 0.0f);
     CHECK(below < 0.6f * lit);
+    return true;
+}
+
+namespace {
+    // The landscape scenes: a 2 x 2 km ground (Box.glb flattened, its top at y = 0) and boxes standing on it ahead of
+    // the camera (down -z) at 20, 50, 100 and 250 m, 1, 2, 4 and 10 m tall, so every cascade has a shadow in view, and
+    // a sun from the side.
+    // The camera stands 10 m up at the origin and looks a little down, from 14 m ahead of it to the horizon.
+    void setUpLandscapeScene() {
+        auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+        auto ground = TRY(createInstance(box));
+        TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
+        TRY(addInstanceToScene(ground));
+        const struct { float distance, size; } boxes[] = {{20, 1}, {50, 2}, {100, 4}, {250, 10}};
+        for (auto [distance, size] : boxes) {
+            auto caster = TRY(createInstance(box));
+            TRY(setInstanceTransform(caster, Transform{{0.0f, size * 0.5f, -distance}, glm::identity<glm::quat>(), glm::vec3(size)}));
+            TRY(addInstanceToScene(caster));
+        }
+        // From the right and a little behind the camera: the shadows fall to the boxes' left, in view.
+        TRY(setSun(glm::vec3(-1.0f, -0.8f, 0.4f), glm::vec3(1.0f), 3.0f));
+        TRY(setCameraPosition({0.0f, 10.0f, 0.0f}));
+        TRY(cameraLookAt({0.0f, 0.0f, -100.0f}));
+    }
+
+    // Which cascade tint a pixel shows (nreCascadeDebugColor): 0 red, 1 green, 2 blue, 3 yellow, -1 none.
+    int cascadeTint(glm::vec3 c) {
+        const float d = 0.2f;
+        if (c.r > c.g + d && c.r > c.b + d) return 0;
+        if (c.g > c.r + d && c.g > c.b + d) return 1;
+        if (c.b > c.r + d && c.b > c.g + d) return 2;
+        if (c.r > c.b + d && c.g > c.b + d && std::abs(c.r - c.g) < 0.1f) return 3;
+        return -1;
+    }
+
+    // Share of the image's pixels showing each cascade tint.
+    std::array<float, 4> cascadeTintShares(const Image& image) {
+        std::array<float, 4> shares{};
+        for (glm::vec3 c : image.pixels) {
+            if (int t = cascadeTint(c); t >= 0) shares[t] += 1.0f;
+        }
+        for (float& s : shares) s /= float(image.pixels.size());
+        std::printf("cascade tints: red %.4f, green %.4f, blue %.4f, yellow %.4f\n", shares[0], shares[1], shares[2], shares[3]);
+        return shares;
+    }
+}
+
+// Landscape: a 10 m box 300 m away still casts a clear shadow on a 2 km ground.
+NRE_SCENARIO(shadow_far) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto ground = TRY(createInstance(box));
+    TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
+    TRY(addInstanceToScene(ground));
+    auto caster = TRY(createInstance(box));
+    TRY(setInstanceTransform(caster, Transform{{0.0f, 5.0f, -300.0f}, glm::identity<glm::quat>(), glm::vec3(10.0f)}));
+    TRY(addInstanceToScene(caster));
+    // A low sun travelling toward -x: the box's shadow reaches 20 m out from its -x face.
+    TRY(setSun(glm::vec3(-1.0f, -0.5f, 0.0f), glm::vec3(1.0f), 3.0f));
+    // From high up on the +z side, about 300 m from the box: it's in the last cascade.
+    TRY(setCameraPosition({0.0f, 220.0f, -100.0f}));
+    TRY(cameraLookAt({-10.0f, 0.0f, -300.0f}));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-far.png");
+    CHECK(!image.pixels.empty());
+    const glm::vec3 shadowSpot{-15.0f, 0.0f, -300.0f}, litSpot{-15.0f, 0.0f, -270.0f};
+    float shadowed = spotLuminance(image, shadowSpot), lit = spotLuminance(image, litSpot);
+    std::printf("shadow spot %.3f, lit spot %.3f\n", shadowed, lit);
+    CHECK(shadowed >= 0.0f && lit > 0.0f);
+    CHECK(shadowed < 0.7f * lit);
+    return litMatchesUnshadowed(image, litSpot);
+}
+
+// Landscape: moving the camera 1 cm sideways doesn't make the shadows swim (the cascades are snapped to texels).
+NRE_SCENARIO(shadow_stable) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    setUpLandscapeScene();
+    Image a = renderAndCapture();
+    saveCapture(a, "shadow-stable-a.png");
+    TRY(moveCameraRelative({0.01f, 0.0f, 0.0f}));
+    Image b = renderAndCapture();
+    saveCapture(b, "shadow-stable-b.png");
+    CHECK(!a.pixels.empty() && !b.pixels.empty());
+    float changed = fractionDifferent(a, b, 8.0f / 255.0f);
+    std::printf("pixels changed by the 1 cm move: %.4f%%\n", changed * 100.0f);
+    CHECK(changed < 0.01f);
+    // The 1 m box 20 m away still casts a crisp shadow: the near cascades are sharp, not one map stretched to 500 m.
+    float shadowed = spotLuminance(b, {-1.0f, 0.0f, -19.7f}), lit = spotLuminance(b, {2.0f, 0.0f, -19.7f});
+    std::printf("near box: shadow spot %.3f, lit spot %.3f\n", shadowed, lit);
+    CHECK(shadowed >= 0.0f && lit > 0.0f);
+    CHECK(shadowed < 0.6f * lit);
+    // Open ground between the near boxes, in the first cascades.
+    return litMatchesUnshadowed(b, {6.0f, 0.0f, -30.0f});
+}
+
+// Landscape: a long wall's shadow runs from near the camera through every cascade border without a gap or a
+// lighter band where the cascades blend.
+NRE_SCENARIO(shadow_cascade_borders) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto ground = TRY(createInstance(box));
+    TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
+    TRY(addInstanceToScene(ground));
+    // 3 m high, from 10 m to 410 m ahead. The sun from the right lays its shadow along its left side, 3.75 m wide.
+    auto wall = TRY(createInstance(box));
+    TRY(setInstanceTransform(wall, Transform{{0.0f, 1.5f, -210.0f}, glm::identity<glm::quat>(), {0.5f, 3.0f, 400.0f}}));
+    TRY(addInstanceToScene(wall));
+    TRY(setSun(glm::vec3(-1.0f, -0.8f, 0.4f), glm::vec3(1.0f), 3.0f));
+    TRY(setCameraPosition({0.0f, 10.0f, 0.0f}));
+    TRY(cameraLookAt({0.0f, 0.0f, -100.0f}));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-cascade-borders.png");
+    CHECK(!image.pixels.empty());
+    // In each blend band and right after each border (the camera looks down -z, so z is about minus the view depth).
+    for (float distance : {29.0f, 33.0f, 64.0f, 70.0f, 131.0f, 141.0f}) {
+        float shadowed = spotLuminance(image, {-2.0f, 0.0f, -distance}), lit = spotLuminance(image, {5.0f, 0.0f, -distance});
+        std::printf("%.0f m: shadow spot %.3f, lit spot %.3f\n", distance, shadowed, lit);
+        CHECK(shadowed >= 0.0f && lit > 0.0f);
+        CHECK(shadowed < 0.6f * lit);
+    }
+    return litMatchesUnshadowed(image, {5.0f, 0.0f, -64.0f});
+}
+
+// setSceneLighting picks the shadow distance: Landscape 500 m (4 cascades in view), then Small 20 m (1). The sun
+// and the sky colour are kept.
+NRE_SCENARIO(scene_lighting_defaults) {
+    Session session(ApiMode::SceneMode);
+    auto vertex = TRY(createShader(std::string(SHADER_DIR) + "/vertex.vert.spv", ShaderType::VERTEX_SHADER));
+    auto fragment = TRY(createShader(std::string(SHADER_DIR) + "/cascadeDebug.frag.spv", ShaderType::FRAGMENT_SHADER));
+    TRY(bindPipeline(TRY(createPipeline(vertex, fragment))));
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Small);
+    setUpLandscapeScene();
+    TRY(setSkyColor(glm::vec3(0.5f)));   // grey, so the sky doesn't count as a tint
+    const glm::vec3 sun = TRY(getSunDirection());
+
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Landscape);
+    Image landscape = renderAndCapture();
+    saveCapture(landscape, "scene-lighting-defaults-landscape.png");
+    CHECK(!landscape.pixels.empty());
+    for (float share : cascadeTintShares(landscape)) CHECK(share > 0.002f);
+
+    TRY(setSceneLighting(SceneLighting::Small));
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Small);
+    Image small = renderAndCapture();
+    saveCapture(small, "scene-lighting-defaults-small.png");
+    CHECK(!small.pixels.empty());
+    auto shares = cascadeTintShares(small);
+    CHECK(shares[0] > 0.002f);
+    CHECK(shares[1] == 0.0f && shares[2] == 0.0f && shares[3] == 0.0f);
+    CHECK(near(TRY(getSunDirection()), sun, 1e-6f));
+    CHECK(near(small.at(kWidth / 2, 2), glm::vec3(srgbEncode(0.5f)), 2.0f / 255.0f));   // the sky colour, kept
+#ifndef NDEBUG
+    CHECK(!setSceneLighting(SceneLighting(7)));
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Small);
+#endif
     return true;
 }
 

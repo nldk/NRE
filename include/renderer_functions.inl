@@ -66,6 +66,8 @@ NRE_FUNCTION(Result<void>, setLightColor, (Handel<Light> light, glm::vec3 color,
 NRE_FUNCTION(Result<void>, setSun, (glm::vec3 direction, glm::vec3 color, float intensity), (direction, color, intensity))
 NRE_FUNCTION(Result<void>, setSunDirection, (glm::vec3 direction), (direction))
 NRE_FUNCTION(Result<glm::vec3>, getSunDirection, (), ())
+NRE_FUNCTION(Result<void>, setSceneLighting, (SceneLighting lighting), (lighting))
+NRE_FUNCTION(Result<SceneLighting>, getSceneLighting, (), ())
 NRE_FUNCTION(Result<void>, setShadowDistance, (float meters), (meters))
 NRE_FUNCTION(Result<void>, setCastsShadows, (Handel<Instance> instance, bool castsShadows), (instance, castsShadows))
 NRE_FUNCTION(Result<void>, setExposure, (float exposure), (exposure))
