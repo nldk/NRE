@@ -110,34 +110,39 @@ Surface nreMaterialSurface(vec3 worldPos, vec3 vertexNormal, vec2 uv) {
     s.roughness = clamp(nreMaterial.roughness * metallicRoughness.g, 0.0, 1.0);
     s.metallic = clamp(nreMaterial.metallic * metallicRoughness.b, 0.0, 1.0);
 
+    // The front side's normal. The normal map is applied to it, and back faces of double-sided materials get the
+    // whole result flipped at the end (the back of a bump is a dent, so the tilt flips too).
     vec3 n = vertexNormal;
     if (dot(n, n) < 1e-12) {
-        // A mesh without normals: the face's own normal, turned toward the camera (so it's right on both sides).
+        // A mesh without normals: the face's own normal, turned toward the camera, then to the front side.
         n = cross(dpdx, dpdy);
         if (dot(n, s.view) < 0.0) n = -n;
         if (dot(n, n) < 1e-24) n = s.view;   // a degenerate triangle: anything finite will do
-    } else if ((nreMaterial.flags & NRE_MATERIAL_DOUBLE_SIDED) != 0u && !gl_FrontFacing) {
-        n = -n;
+        if (!gl_FrontFacing) n = -n;
     }
     n = normalize(n);
 
     // Normal map, in a tangent frame built from the screen-space derivatives of position and UV (no vertex
     // tangents needed). Without usable UVs (none, or degenerate) the UV derivatives' determinant is ~0: the
-    // vertex normal is used as it is then.
+    // normal is used as it is then.
     float det = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
     if (abs(det) > 1e-14) {
+        // Schüler's cotangent frame: T and B point along the gradients of u and v, times
+        // dot(n, cross(dpdx, dpdy)). That factor's sign depends on the framebuffer's y direction (negative for
+        // camera-facing surfaces in Vulkan) and on which side n is, so it's divided out.
         vec3 dp2perp = cross(dpdy, n);
         vec3 dp1perp = cross(n, dpdx);
-        vec3 T = dp2perp * duvdx.x + dp1perp * duvdy.x;   // along +u
-        vec3 B = dp2perp * duvdx.y + dp1perp * duvdy.y;   // along +v
-        float lengthSq = max(dot(T, T), dot(B, B));
-        if (lengthSq > 0.0) {
-            float scale = inversesqrt(lengthSq);
+        float side = dot(n, cross(dpdx, dpdy)) < 0.0 ? -1.0 : 1.0;
+        vec3 T = (dp2perp * duvdx.x + dp1perp * duvdy.x) * side;   // along +u
+        vec3 B = (dp2perp * duvdx.y + dp1perp * duvdy.y) * side;   // along +v
+        // Each normalized on its own, so a texture stretched more along u than v still tilts by its own angle.
+        if (dot(T, T) > 0.0 && dot(B, B) > 0.0) {
             // glTF's +Y points up the image, which is -v (its UV origin is the top left).
-            vec3 perturbed = T * (mapped.x * scale) - B * (mapped.y * scale) + n * mapped.z;
+            vec3 perturbed = normalize(T) * mapped.x - normalize(B) * mapped.y + n * mapped.z;
             if (dot(perturbed, perturbed) > 1e-12) n = normalize(perturbed);
         }
     }
+    if ((nreMaterial.flags & NRE_MATERIAL_DOUBLE_SIDED) != 0u && !gl_FrontFacing) n = -n;
     s.normal = n;
 
     if ((nreMaterial.flags & NRE_MATERIAL_ALPHA_MASK) != 0u && s.alpha < nreMaterial.alphaCutoff) discard;

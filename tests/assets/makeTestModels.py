@@ -5,6 +5,10 @@
   alphaQuad.png        the checker texture (opaque orange / transparent cells)
   materialSpheres.gltf two white spheres side by side: roughness 0.1 (x = -0.7) and 0.9 (x = +0.7), metallic 0
   noUv.obj             unit cube with no vt and no vn
+  normalQuads.gltf     five 0.5 m quads in a row, constant normal maps: flat, tilted 45 deg toward +X, -X, +Y, -Y
+  normalQuads.png      their normal map (one column per quad)
+  metalQuads.gltf      three quads: metallic 0.5 from a texture, 0.5 from the factor, 1 from a texture
+  metalQuads.png       their metallic-roughness map
 
 Needs numpy and Pillow. glTF buffers are embedded as base64 data URIs, so each .gltf is self-contained.
 """
@@ -153,8 +157,97 @@ def write_no_uv_obj():
     (OUT / "noUv.obj").write_text("\n".join(lines) + "\n")
 
 
+def write_quad_row(name, quads, materials, images):
+    """A row of 0.5 m quads facing +Z, 0.6 m apart and centred on x = 0, one primitive each.
+
+    quads: [(material index, (u0, v0, u1, v1))]; v0 is the quad's top edge (glTF's UV origin is top-left).
+    images: PNG file names; texture i uses image i with a nearest/clamp sampler.
+    """
+    blobs, prims = [], []
+    for i, (material, (u0, v0, u1, v1)) in enumerate(quads):
+        x = (i - (len(quads) - 1) / 2) * 0.6
+        pos = np.asarray([(x - .25, -.25, 0), (x + .25, -.25, 0), (x + .25, .25, 0), (x - .25, .25, 0)], dtype="<f4")
+        nrm = np.asarray([(0, 0, 1)] * 4, dtype="<f4")
+        uv = np.asarray([(u0, v1), (u1, v1), (u1, v0), (u0, v0)], dtype="<f4")
+        idx = np.asarray([0, 1, 2, 0, 2, 3], dtype="<u2")
+        first = len(blobs)
+        blobs += [pos.tobytes(), nrm.tobytes(), uv.tobytes(), idx.tobytes()]
+        prims.append((first, material, pos))
+    data, spans = pack(blobs)
+    views, accessors, primitives = [], [], []
+    for first, material, pos in prims:
+        for k, (kind, count, comp) in enumerate([("VEC3", 4, 5126), ("VEC3", 4, 5126), ("VEC2", 4, 5126), ("SCALAR", 6, 5123)]):
+            off, length = spans[first + k]
+            views.append({"buffer": 0, "byteOffset": off, "byteLength": length, "target": 34963 if k == 3 else 34962})
+            acc = {"bufferView": first + k, "componentType": comp, "count": count, "type": kind}
+            if k == 0:
+                acc["min"], acc["max"] = pos.min(axis=0).tolist(), pos.max(axis=0).tolist()
+            accessors.append(acc)
+        primitives.append({"attributes": {"POSITION": first, "NORMAL": first + 1, "TEXCOORD_0": first + 2},
+                           "indices": first + 3, "material": material, "mode": 4})
+    gltf = {
+        "asset": {"version": "2.0", "generator": "makeTestModels.py"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0, "name": name}],
+        "meshes": [{"name": name, "primitives": primitives}],
+        "materials": materials,
+        "textures": [{"sampler": 0, "source": i} for i in range(len(images))],
+        "samplers": [{"magFilter": 9728, "minFilter": 9728, "wrapS": 33071, "wrapT": 33071}],
+        "images": [{"uri": image} for image in images],
+        "accessors": accessors,
+        "bufferViews": views,
+        "buffers": [{"byteLength": len(data), "uri": data_uri(data)}],
+    }
+    (OUT / f"{name}.gltf").write_text(json.dumps(gltf, indent=1))
+
+
+def column_image(path, colors, cell=8):
+    """One cell-wide column of constant colour per entry, cell px high."""
+    img = np.zeros((cell, cell * len(colors), 4), dtype=np.uint8)
+    for i, c in enumerate(colors):
+        img[:, i * cell:(i + 1) * cell] = (*c, 255)
+    Image.fromarray(img, "RGBA").save(OUT / path)
+
+
+def column_uv(i, count):
+    """UV rect inside column i of a column_image, inset so filtering never reaches the next column."""
+    return ((i + 0.25) / count, 0.25, (i + 0.75) / count, 0.75)
+
+
+def write_normal_quads():
+    # Constant tangent-space normals (glTF: +X right = +u, +Y up = -v, +Z out): flat, then tilted 45 degrees
+    # toward +X, -X, +Y, -Y. White, non-metal, roughness 1, so only the normal differs.
+    normals = [(128, 128, 255), (200, 128, 200), (56, 128, 200), (128, 200, 200), (128, 56, 200)]
+    column_image("normalQuads.png", normals)
+    material = {"name": "normalMapped", "normalTexture": {"index": 0},
+                "pbrMetallicRoughness": {"metallicFactor": 0.0, "roughnessFactor": 1.0}}
+    write_quad_row("normalQuads", [(0, column_uv(i, 5)) for i in range(5)], [material], ["normalQuads.png"])
+
+
+def write_metal_quads():
+    # Metallic-roughness textures (g = roughness, b = metallic, read as linear):
+    #   left:   texture b = 128 (metallic 0.502 when read linear, 0.216 if wrongly decoded as sRGB), factor 1
+    #   centre: no texture, metallicFactor 0.502: must match the left one
+    #   right:  texture b = 255, factor 1: fully metal, so no diffuse
+    column_image("metalQuads.png", [(0, 255, 128), (0, 255, 255)])
+    white = [1, 1, 1, 1]
+    materials = [
+        {"name": "halfMetalTexture", "pbrMetallicRoughness": {"baseColorFactor": white, "metallicFactor": 1.0,
+                                                               "roughnessFactor": 1.0, "metallicRoughnessTexture": {"index": 0}}},
+        {"name": "halfMetalFactor", "pbrMetallicRoughness": {"baseColorFactor": white, "metallicFactor": 128 / 255,
+                                                              "roughnessFactor": 1.0}},
+        {"name": "fullMetalTexture", "pbrMetallicRoughness": {"baseColorFactor": white, "metallicFactor": 1.0,
+                                                               "roughnessFactor": 1.0, "metallicRoughnessTexture": {"index": 0}}},
+    ]
+    quads = [(0, column_uv(0, 2)), (1, column_uv(0, 2)), (2, column_uv(1, 2))]
+    write_quad_row("metalQuads", quads, materials, ["metalQuads.png"])
+
+
 if __name__ == "__main__":
     write_alpha_quad()
     write_material_spheres()
     write_no_uv_obj()
+    write_normal_quads()
+    write_metal_quads()
     print("wrote models to", OUT)

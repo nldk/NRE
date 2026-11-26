@@ -347,6 +347,62 @@ NRE_SCENARIO(no_uv_mesh) {
     return true;
 }
 
+namespace {
+    // Brightness of quad i (centre ~139 px per metre from the image centre) of a row of 0.5 m quads 0.6 m apart,
+    // n of them, 3 m from the camera (see makeTestModels.py write_quad_row).
+    float quadBrightness(const Image& image, int i, int n) {
+        int cx = int(std::lround(kWidth / 2.0 + (i - (n - 1) / 2.0) * 0.6 * 139.0));
+        return brightness(image.average(uint32_t(cx - 15), kHeight / 2 - 15, uint32_t(cx + 15), kHeight / 2 + 15));
+    }
+}
+
+// Constant normal maps tilted 45 degrees (flat, +X, -X, +Y, -Y left to right). A sun from the right brightens the
+// +X tilt and darkens the -X one; a sun from above does the same for +Y and -Y. A sign error on either tangent axis fails.
+NRE_SCENARIO(normal_map) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSkyColor(glm::vec3(0.02f)));
+    TRY(setExposure(0.25f));
+    placeModel(TEST_ASSET_DIR "/normalQuads.gltf", glm::vec3(0.0f, 0.0f, -3.0f));
+
+    TRY(setSun(glm::vec3(-1.0f, 0.0f, -1.0f), glm::vec3(1.0f), 3.0f));   // toward the sun: +x and +z
+    Image fromRight = renderAndCapture();
+    CHECK(!fromRight.pixels.empty());
+    float flat = quadBrightness(fromRight, 0, 5), plusX = quadBrightness(fromRight, 1, 5), minusX = quadBrightness(fromRight, 2, 5);
+    std::printf("sun from +x: flat %.3f, +X %.3f, -X %.3f\n", flat, plusX, minusX);
+    CHECK(plusX > flat * 1.05f);
+    CHECK(minusX < flat * 0.7f);
+
+    TRY(setSun(glm::vec3(0.0f, -1.0f, -1.0f), glm::vec3(1.0f), 3.0f));   // toward the sun: +y and +z
+    Image fromAbove = renderAndCapture();
+    CHECK(!fromAbove.pixels.empty());
+    flat = quadBrightness(fromAbove, 0, 5);
+    float plusY = quadBrightness(fromAbove, 3, 5), minusY = quadBrightness(fromAbove, 4, 5);
+    std::printf("sun from +y: flat %.3f, +Y %.3f, -Y %.3f\n", flat, plusY, minusY);
+    CHECK(plusY > flat * 1.05f);
+    CHECK(minusY < flat * 0.7f);
+    return true;
+}
+
+// Metallic-roughness textures are read as linear data with metallic in blue: metallic 0.5 from the texture looks
+// like metallic 0.5 from the factor (an sRGB decode would read 0.22, much brighter), and a fully metal texel loses
+// its diffuse light (a rough white metal still reflects the sun, so it is only somewhat darker).
+NRE_SCENARIO(metallic_texture) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSkyColor(glm::vec3(0.02f)));
+    TRY(setExposure(0.5f));
+    TRY(setSun(glm::vec3(-0.3f, -0.5f, -1.0f), glm::vec3(1.0f), 3.0f));
+    placeModel(TEST_ASSET_DIR "/metalQuads.gltf", glm::vec3(0.0f, 0.0f, -3.0f));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    float fromTexture = quadBrightness(image, 0, 3), fromFactor = quadBrightness(image, 1, 3), metal = quadBrightness(image, 2, 3);
+    std::printf("half metal: texture %.3f, factor %.3f; full metal %.3f\n", fromTexture, fromFactor, metal);
+    CHECK(std::abs(fromTexture - fromFactor) < 3.0f * 3.0f / 255.0f);
+    CHECK(metal < fromFactor * 0.9f);
+    return true;
+}
+
 // The police car with the sun, using its real material factors.
 NRE_SCENARIO(demo_car_lit) {
     Session session(ApiMode::SceneMode);
