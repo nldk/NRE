@@ -87,6 +87,13 @@ inline std::array<glm::vec3, 8> frustumSliceCorners(const glm::mat4& view, float
 // Light view-projection for one cascade. `sunDirection` is the direction the light travels (toward the ground).
 // Bounding-sphere fit (rotation-stable size), standard-Z orthographic depth (0 near the light, 1 far; glm is built
 // with GLM_FORCE_DEPTH_ZERO_TO_ONE), centre snapped to whole texels in light space so the map doesn't swim.
+// Contract for the shadow pass and shader:
+//  - The depth range is tight around the slice's bounding sphere (best precision), so casters sunward of it land in
+//    front of the near plane (clip z < 0). The shadow pipeline MUST enable depth clamping (depthClampEnable =
+//    VK_TRUE, device feature `depthClamp`) so they clamp to depth 0 ("pancaking") and still cast.
+//  - Standard depth (0 at the light) and NO Y flip, unlike the main camera pass: shadow lookups use
+//    uv = ndc.xy * 0.5 + 0.5. Because the main pass flips Y, triangle winding is mirrored relative to it: use cull
+//    mode NONE (as planned) or flip frontFace.
 inline glm::mat4 cascadeViewProj(const std::array<glm::vec3, 8>& corners, glm::vec3 sunDirection, uint32_t resolution) {
     glm::vec3 dir = glm::normalize(sunDirection);
     glm::vec3 up = std::fabs(dir.y) > 0.99f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);

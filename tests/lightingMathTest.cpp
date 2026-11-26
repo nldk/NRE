@@ -94,17 +94,40 @@ static void cascadeStable() {
         auto corners = frustumSliceCorners(view, glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 80.0f);
         return cascadeViewProj(corners, sun, res);
     };
-    glm::mat4 a = build({10.0f, 3.0f, 20.0f});
-    // World size of one shadow texel: ndc spans 2 over `res` texels and a[0][0] is 2 / diameter along light x.
+    const glm::vec3 eye0(10.0f, 3.0f, 20.0f);
+    glm::mat4 a = build(eye0);
+    // World size of one shadow texel: row 0 of the matrix is (light right) / radius, so ndc spans 2 / length(row0)
+    // world units over `res` texels.
     glm::vec3 lightRight = glm::normalize(glm::cross(sun, glm::vec3(0, 1, 0)));
-    float texel = 2.0f / (std::fabs(a[0][0]) * float(res));
-    glm::mat4 b = build(glm::vec3(10.0f, 3.0f, 20.0f) + lightRight * (0.3f * texel));
+    glm::vec3 lightUp = glm::cross(lightRight, sun);
+    float texel = 2.0f / (glm::length(glm::vec3(a[0][0], a[1][0], a[2][0])) * float(res));
+    // Move 0.3 texel along both light axes so both snaps are exercised.
+    glm::mat4 b = build(eye0 + (lightRight + lightUp) * (0.3f * texel));
     for (int axis = 0; axis < 2; ++axis) {
         double ta = double((a * glm::vec4(0, 0, 0, 1))[axis]) * res * 0.5;
         double tb = double((b * glm::vec4(0, 0, 0, 1))[axis]) * res * 0.5;
+        // Each projected world origin sits on a whole texel (the snap invariant), so their difference is whole too.
+        CHECK(std::fabs(ta - std::round(ta)) < 1e-3);
+        CHECK(std::fabs(tb - std::round(tb)) < 1e-3);
         double d = ta - tb;
         CHECK(std::fabs(d - std::round(d)) < 1e-3);
     }
+}
+
+// The shadow pass relies on depth clamping: casters sunward of the tight near plane project in front of it (z < 0)
+// but stay inside the map in xy.
+static void cascadeCasterClampsToNearPlane() {
+    const glm::vec3 sun = glm::normalize(glm::vec3(0.3f, -0.8f, 0.4f));
+    glm::mat4 view = glm::lookAt(glm::vec3(10, 3, 20), glm::vec3(10, 3, 19), glm::vec3(0, 1, 0));
+    auto corners = frustumSliceCorners(view, glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 20.0f);
+    glm::mat4 m = cascadeViewProj(corners, sun, 2048);
+    glm::vec3 centre(0.0f);
+    for (const glm::vec3& c : corners) centre += c;
+    centre /= 8.0f;
+    glm::vec4 p = m * glm::vec4(centre - sun * 100.0f, 1.0f);
+    CHECK(p.w == 1.0f);
+    CHECK(p.z < 0.0f);
+    CHECK(std::fabs(p.x) <= 1.0f && std::fabs(p.y) <= 1.0f);
 }
 
 static void transmittanceZenithBrighter() {
@@ -167,6 +190,7 @@ int main() {
     cascadeViewProjVerticalSun();
     cascadeSplitsIncreasing();
     cascadeStable();
+    cascadeCasterClampsToNearPlane();
     transmittanceZenithBrighter();
     sunsetRed();
     autoExposureShape();
