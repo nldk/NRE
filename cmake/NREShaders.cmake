@@ -1,6 +1,6 @@
-# nre_compile_shaders(<target> <shader_dir>)
+# nre_compile_shaders(<target> <shader_dir> [<shader_dir>...])
 #
-# Compiles every .vert/.frag/.comp under <shader_dir> to
+# Compiles every .vert/.frag/.comp under each <shader_dir> to
 # ${CMAKE_CURRENT_BINARY_DIR}/shaders/<name>.spv, builds them before <target>,
 # and gives <target> a SHADER_DIR define pointing at that folder.
 #
@@ -10,14 +10,18 @@
 # directory too (the Vulkan::glslc imported target isn't).
 find_package(Vulkan 1.3 REQUIRED COMPONENTS glslc)
 
-function(nre_compile_shaders target shader_dir)
+function(nre_compile_shaders target)
     set(out_dir ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 
-    file(GLOB_RECURSE sources CONFIGURE_DEPENDS
-        ${shader_dir}/*.vert
-        ${shader_dir}/*.frag
-        ${shader_dir}/*.comp
-    )
+    set(sources)
+    foreach(shader_dir ${ARGN})
+        file(GLOB_RECURSE found CONFIGURE_DEPENDS
+            ${shader_dir}/*.vert
+            ${shader_dir}/*.frag
+            ${shader_dir}/*.comp
+        )
+        list(APPEND sources ${found})
+    endforeach()
 
     set(binaries)
     foreach(src ${sources})

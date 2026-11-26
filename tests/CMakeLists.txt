@@ -6,3 +6,31 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(lightingMathTest PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
 endif()
 add_test(NAME lightingMath COMMAND lightingMathTest)
+
+# GPU tests: render offscreen through the unsafe render target and read it back. A window opens while they run.
+if(NRE_UNSAFE_API)
+    add_executable(nre_visual_test visual/visualTest.cpp visual/capture.cpp)
+    target_link_libraries(nre_visual_test PRIVATE NRE::renderer Vulkan::Vulkan stb_image)
+    target_include_directories(nre_visual_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/visual)
+    nre_compile_shaders(nre_visual_test ${PROJECT_SOURCE_DIR}/example/shaders ${CMAKE_CURRENT_SOURCE_DIR}/visual/shaders)
+    target_compile_definitions(nre_visual_test PRIVATE
+        ASSET_DIR="${PROJECT_SOURCE_DIR}/example/assets"
+        GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/visual/golden"
+    )
+    set_target_properties(nre_visual_test PROPERTIES
+        BUILD_RPATH   "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN"
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(nre_visual_test PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type -Wno-missing-field-initializers)
+    endif()
+
+    # One test per scenario name registered with NRE_SCENARIO (underscores become dashes).
+    foreach(scenario capture-clear baseline-car baseline-skybox)
+        add_test(NAME ${scenario} COMMAND nre_visual_test ${scenario})
+        set_tests_properties(${scenario} PROPERTIES
+            FAIL_REGULAR_EXPRESSION "Validation Error"
+            ENVIRONMENT "NRE_TEST_OUT=${CMAKE_CURRENT_BINARY_DIR}/out"
+        )
+    endforeach()
+endif()
