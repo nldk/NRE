@@ -33,13 +33,18 @@ namespace NRE {
         std::vector<uint32_t> code(size / sizeof(uint32_t));
         ifs.seekg(0);
         ifs.read(reinterpret_cast<char*>(code.data()), size);
+        return create(code, "'" + path + "'");
+    }
+    Result<void> Shader::create(std::span<const uint32_t> code, const std::string& name) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
         VkShaderModuleCreateInfo info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        info.codeSize = size;
+        info.codeSize = code.size_bytes();
         info.pCode = code.data();
         if (VkResult r = vkCreateShaderModule(c->vulkan.device, &info, nullptr, &shader); r != VK_SUCCESS) {
             shader = VK_NULL_HANDLE;
-            auto error = Error{ErrorCode::ShaderCreationFailed, "createShader(): failed to create a shader module from '"
-                               + path + "': " + std::string(ErrorHandeling::vkResultName(r))};
+            auto error = Error{ErrorCode::ShaderCreationFailed, "createShader(): failed to create a shader module from "
+                               + name + ": " + std::string(ErrorHandeling::vkResultName(r))};
             if (ErrorHandeling::handleError(error)) return std::unexpected(error);
         }
         return {};

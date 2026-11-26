@@ -44,6 +44,10 @@ int main() {
     auto scene = createScene();
     addInstanceToScene(car);
     translateInstance(car,glm::vec3(0.0f,0.0f,-1.0f));
+    std::string dir = ASSET_DIR "/skyboxes/plains/";
+    auto sky = createCubemap(dir + "right.png", dir + "left.png", dir + "top.png",
+                           dir + "bottom.png", dir + "front.png", dir + "back.png").value();
+    setSkybox(sky);
 
     OrbitCamera camera;
     camera.target = getInstanceTransform(car).value().position;

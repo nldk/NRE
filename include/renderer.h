@@ -28,6 +28,29 @@ namespace NRE {
         Right,
         Middle,
     };
+    // Physical keys, named after the US layout (Key::W is the key where W is on a US keyboard, whatever the layout).
+    // The values are GLFW's key codes.
+    enum class Key {
+        Space = 32, Apostrophe = 39, Comma = 44, Minus = 45, Period = 46, Slash = 47,
+        Zero = 48, One, Two, Three, Four, Five, Six, Seven, Eight, Nine,
+        Semicolon = 59, Equal = 61,
+        A = 65, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+        LeftBracket = 91, Backslash = 92, RightBracket = 93, GraveAccent = 96,
+        Escape = 256, Enter, Tab, Backspace, Insert, Delete, Right, Left, Down, Up, PageUp, PageDown, Home, End,
+        CapsLock = 280, ScrollLock, NumLock, PrintScreen, Pause,
+        F1 = 290, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+        Keypad0 = 320, Keypad1, Keypad2, Keypad3, Keypad4, Keypad5, Keypad6, Keypad7, Keypad8, Keypad9,
+        KeypadDecimal, KeypadDivide, KeypadMultiply, KeypadSubtract, KeypadAdd, KeypadEnter, KeypadEqual,
+        LeftShift = 340, LeftControl, LeftAlt, LeftSuper, RightShift, RightControl, RightAlt, RightSuper, Menu,
+    };
+    enum class CursorMode {
+        Normal,
+        // Invisible while it's over the window, but moves and leaves the window as usual.
+        Hidden,
+        // Hidden and kept in the window, with unlimited movement: for mouse-look cameras.
+        // getMouseDelta keeps working; getMousePosition is no longer a point in the window.
+        Locked,
+    };
     enum class RenderErrorPolicy {
         Ignore,
         Return,
@@ -66,6 +89,8 @@ namespace NRE {
         DescriptorCreationFailed,
         ShaderCreationFailed,
         UnknownError,
+        // Added after 0.1.0: new codes go at the end so the existing values don't change.
+        LibraryLoadFailed,
     };
     struct WindowConfig {
         int width,height;
@@ -117,6 +142,7 @@ namespace NRE {
             case ErrorCode::SizeOfBufferToBig: return "SizeOfBufferToBig";
             case ErrorCode::DescriptorCreationFailed: return "DescriptorCreationFailed";
             case ErrorCode::ShaderCreationFailed: return "ShaderCreationFailed";
+            case ErrorCode::LibraryLoadFailed: return "LibraryLoadFailed";
         }
         return "UnknownError. Not in enum.";
     }
@@ -158,6 +184,7 @@ namespace NRE {
     class Scene;
     class Texture;
     struct Material;
+    class Cubemap;
 
     RENDERER_API Result<void> setRenderConfig(RenderConfig config);
     RENDERER_API Result<void> init();
@@ -245,6 +272,36 @@ namespace NRE {
     RENDERER_API Result<void> setLightDirection(Handel<Light> light, glm::vec3 direction);
     RENDERER_API Result<void> setLightColor(Handel<Light> light, glm::vec3 color, float intensity);
 
+    // The sun: one directional light per scene, kept apart from the scene's other lights so it can drive the
+    // sky and (later) shadows. Same direction and intensity conventions as createDirectionalLight.
+    // A scene starts without one (intensity 0). Shaders read it from the Frame block:
+    //
+    //     layout(set = 0, binding = 0) uniform Frame {
+    //         mat4 viewProj;
+    //         vec4 cameraPos;
+    //         uint lightCount;
+    //         vec4 sunDirection;   // xyz: the way the light travels, normalized
+    //         vec4 sunColor;       // rgb: color, w: intensity (0: no sun)
+    //     } frame;
+    //
+    // Shaders that stop at lightCount still work.
+    RENDERER_API Result<void> setSun(glm::vec3 direction, glm::vec3 color = glm::vec3(1.0f), float intensity = 3.0f);
+    // Keeps the color and intensity, e.g. for a day/night cycle.
+    RENDERER_API Result<void> setSunDirection(glm::vec3 direction);
+    RENDERER_API Result<glm::vec3> getSunDirection();
+
+    // Cubemaps and the skybox. A cubemap is six square images of the same size, one per side of a cube around
+    // the camera, loaded as color (sRGB). The faces are in the OpenGL order, the one most skybox downloads name
+    // their files after: right (+X), left (-X), top (+Y), bottom (-Y), front (+Z), back (-Z).
+    RENDERER_API Result<Handel<Cubemap>> createCubemap(std::string right, std::string left, std::string top,
+                                                       std::string bottom, std::string front, std::string back);
+    // Waits for the GPU to finish the frames in flight. Scenes using it go back to having no skybox.
+    RENDERER_API Result<void> destroyCubemap(Handel<Cubemap> cubemap);
+    // The bound scene's sky, drawn behind everything (3D only). An empty handle removes it: the clear color shows again.
+    // Shaders can also sample it, e.g. for reflections: layout(set = 0, binding = 2) uniform samplerCube skybox;
+    // Without a skybox that binding is a black cubemap.
+    RENDERER_API Result<void> setSkybox(Handel<Cubemap> cubemap);
+
     // Angles are in radians.
     RENDERER_API Result<void> setCameraPosition(glm::vec3 position);
     RENDERER_API Result<glm::vec3> getCameraPosition();
@@ -268,6 +325,19 @@ namespace NRE {
     RENDERER_API Result<glm::vec2> getMouseDelta();
     // Scroll wheel steps. Positive means scrolling up / away from you.
     RENDERER_API Result<float> getScrollDelta();
+    // Pressed / released: the button went down / up during the last pollEvents call, so it's true for one frame.
+    // A click shorter than a frame shows up as both pressed and released, while isMouseButtonDown stays false.
+    RENDERER_API Result<bool> isMouseButtonPressed(MouseButton button);
+    RENDERER_API Result<bool> isMouseButtonReleased(MouseButton button);
+    // Cursor position in pixels from the window's top-left corner, as of the last pollEvents call.
+    RENDERER_API Result<glm::vec2> getMousePosition();
+    RENDERER_API Result<void> setCursorMode(CursorMode mode);
+
+    // Keyboard input. Same rules as the mouse buttons: pressed / released are true for the one frame
+    // after the pollEvents call that saw it happen. Holding a key doesn't repeat isKeyPressed.
+    RENDERER_API Result<bool> isKeyDown(Key key);
+    RENDERER_API Result<bool> isKeyPressed(Key key);
+    RENDERER_API Result<bool> isKeyReleased(Key key);
 
 };
 

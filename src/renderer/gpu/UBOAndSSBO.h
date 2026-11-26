@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <vulkan/vulkan_core.h>
@@ -8,11 +9,20 @@
 #include "core/frames.h"
 
 namespace NRE {
-    // Same layout as the shader's structs: only vec4/mat4, so std140/std430 add no hidden padding.
+    // Same layout as the shader's structs: only vec4/mat4 (and explicit padding), so std140/std430 add no hidden padding.
     struct alignas(16) GpuLight  { glm::vec4 position; glm::vec4 color; };
-    struct alignas(16) FrameData { glm::mat4 viewProj; glm::vec4 cameraPos; uint32_t lightCount; };
+    struct alignas(16) FrameData {
+        glm::mat4 viewProj;
+        glm::vec4 cameraPos;
+        uint32_t lightCount;
+        uint32_t padding[3];      // std140 starts the next vec4 at 96; glm's vec4 is only 4-byte aligned
+        // Added after lightCount, so shaders that declare the block without them still match.
+        glm::vec4 sunDirection;   // xyz: the way the sunlight travels (normalized), w unused
+        glm::vec4 sunColor;       // rgb: color, w: intensity. 0 when the scene has no sun
+    };
     static_assert(sizeof(GpuLight) == 32);
-    static_assert(sizeof(FrameData) == 96);   // 64 + 16 + 4, padded to a multiple of 16
+    static_assert(offsetof(FrameData, lightCount) == 80 && offsetof(FrameData, sunDirection) == 96);
+    static_assert(sizeof(FrameData) == 128);
 
 // A UBO or SSBO the CPU rewrites every frame: one copy per frame in flight, so the CPU never writes
 // a copy the GPU is still reading. Call destroy() in shutdown(), before the allocator is destroyed.

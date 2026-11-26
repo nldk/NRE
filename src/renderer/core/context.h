@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 #include "VkBootstrap.h"
 #include <vk_mem_alloc.h>
+#include <bitset>
 #include <vector>
 #include "core/resourceManagement.h"
 #include "renderer.h"
@@ -50,6 +51,11 @@ namespace NRE {
         std::vector<DescriptorSetLayout> descriptorLayouts;
         Handel<Texture> defaultTexture;
         Handel<Material> defaultMaterial;
+        // 1x1 black faces: what set 0 binding 2 shows while a scene has no skybox.
+        Handel<Cubemap> defaultCubemap;
+        Handel<Pipeline> skyboxPipeline;
+        // FunctionDrawMode: the scene renderFrame() bound the frame data of, so endFrame() draws its skybox.
+        Handel<Scene> frameScene;
         // FunctionDrawMode: true between renderFrame() and endFrame().
         bool isDrawing = false;
         // FunctionDrawMode: false when renderFrame() skipped the frame (swapchain out of date, no pipeline under
@@ -64,6 +70,10 @@ namespace NRE {
         glm::dvec2 cursor{0.0};
         glm::vec2 cursorDelta{0.0f};
         float scrollDelta = 0.0f;
+        // What went down / up during the last pollEvents call. Set by keyCallback / mouseButtonCallback,
+        // cleared at the start of the next pollEvents.
+        std::bitset<GLFW_KEY_LAST + 1> keysPressed, keysReleased;
+        std::bitset<GLFW_MOUSE_BUTTON_LAST + 1> buttonsPressed, buttonsReleased;
     };
 
     struct FrameTimer {

@@ -12,6 +12,7 @@
 #include <vk_mem_alloc.h>
 #include "defaultAssets/defaultAssets.h"
 #include "gpu/texture.h"
+#include "gpu/cubemap.h"
 
 namespace NRE {
     namespace {std::unique_ptr<Context> globalContext = nullptr;}
@@ -29,13 +30,13 @@ namespace NRE {
         return {};
     }
     void transition(VkCommandBuffer cmd, VkImage img, VkImageLayout from, VkImageLayout to,
-                    VkImageAspectFlags aspect) {
+                    VkImageAspectFlags aspect, uint32_t layerCount) {
         VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
         b.srcStageMask = b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
         b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
         b.oldLayout = from; b.newLayout = to; b.image = img;
-        b.subresourceRange = {aspect, 0, 1, 0, 1};
+        b.subresourceRange = {aspect, 0, 1, 0, layerCount};
         VkDependencyInfo d{VK_STRUCTURE_TYPE_DEPENDENCY_INFO, nullptr, 0, 0, nullptr, 0, nullptr, 1, &b};
         vkCmdPipelineBarrier2(cmd, &d);
     }
@@ -96,6 +97,19 @@ namespace NRE {
     // Fires during glfwPollEvents, possibly several times, so it adds up instead of overwriting.
     void scrollCallback(GLFWwindow*, double, double yOffset) {
         if (auto c = context()) c->window.scrollDelta += static_cast<float>(yOffset);
+    }
+    // Events instead of polling glfwGetKey, so a tap that starts and ends between two pollEvents calls isn't missed.
+    void keyCallback(GLFWwindow*, int key, int, int action, int) {
+        auto c = context();
+        if (!c || key < 0 || key > GLFW_KEY_LAST) return;   // GLFW_KEY_UNKNOWN is -1
+        if (action == GLFW_PRESS) c->window.keysPressed.set(key);
+        else if (action == GLFW_RELEASE) c->window.keysReleased.set(key);
+    }
+    void mouseButtonCallback(GLFWwindow*, int button, int action, int) {
+        auto c = context();
+        if (!c || button < 0 || button > GLFW_MOUSE_BUTTON_LAST) return;
+        if (action == GLFW_PRESS) c->window.buttonsPressed.set(button);
+        else if (action == GLFW_RELEASE) c->window.buttonsReleased.set(button);
     }
 
     void updateFrameTimer(Context* c) {
@@ -255,6 +269,8 @@ namespace NRE {
         glfwSetWindowCloseCallback(c->window.window,closeCallback);
         glfwSetFramebufferSizeCallback(c->window.window,framebufferSizeCallback);
         glfwSetScrollCallback(c->window.window,scrollCallback);
+        glfwSetKeyCallback(c->window.window,keyCallback);
+        glfwSetMouseButtonCallback(c->window.window,mouseButtonCallback);
         // Start from the real cursor position, so the first getMouseDelta isn't a jump from (0, 0).
         glfwGetCursorPos(c->window.window, &c->window.cursor.x, &c->window.cursor.y);
         c->timer.lastFrameTime = c->timer.windowStart = glfwGetTime();
@@ -370,10 +386,12 @@ namespace NRE {
         if (!err) return err;
 
         // The order of descriptorLayouts is the set number: 0 = per frame (scene), 1 = material.
+        // Set 0: 0 = FrameData (camera, sun), 1 = lights, 2 = the skybox cubemap.
         auto frameLayout = DescriptorSetLayout();
         VkDescriptorSetLayoutBinding frameBindings[] = {
             {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         };
         err = frameLayout.createLayout(frameBindings);
         if (!err) return err;
@@ -393,6 +411,33 @@ namespace NRE {
         err = defaultMaterial.createDescriptorSet();
         if (!err) return err;
         c->vulkan.defaultMaterial = c->manager.create(std::move(defaultMaterial));
+
+        // Before any scene: createScene() points every frame set's binding 2 at it.
+        {
+            const uint32_t black[6] = {0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000};
+            Cubemap defaultCubemap;
+            err = defaultCubemap.uploadFaces(black, 1);
+            if (!err) return err;
+            c->vulkan.defaultCubemap = c->manager.create(std::move(defaultCubemap));
+        }
+        {
+            static constexpr uint32_t skyboxVert[] = {
+#include "embeddedShaders/skybox.vert.inc"
+            };
+            static constexpr uint32_t skyboxFrag[] = {
+#include "embeddedShaders/skybox.frag.inc"
+            };
+            Handel<Shader> vertex = c->manager.create(Shader(std::span(skyboxVert), ShaderType::VERTEX_SHADER));
+            Handel<Shader> fragment = c->manager.create(Shader(std::span(skyboxFrag), ShaderType::FRAGMENT_SHADER));
+            // No vertex input (the vertex shader makes the triangle) and no culling. The sky sits at depth 1, the
+            // cleared value, so LESS_OR_EQUAL passes only where nothing was drawn, and it doesn't write depth.
+            Pipeline skybox;
+            err = skybox.createPipeline(vertex, fragment, {}, VK_CULL_MODE_NONE, VK_COMPARE_OP_LESS_OR_EQUAL, false);
+            c->manager.destroy(vertex, true);   // the pipeline doesn't need the modules any more
+            c->manager.destroy(fragment, true);
+            if (!err) return err;
+            if (skybox.pipeline != VK_NULL_HANDLE) c->vulkan.skyboxPipeline = c->manager.create(std::move(skybox));
+        }
 
         // FunctionDrawMode draws with the bound scene's camera and lights, so give it one: the camera
         // and light functions then work without calling createScene().
@@ -582,10 +627,12 @@ namespace NRE {
         if (functionMode) {
             // Camera and lights for this frame. The draw calls then only push their model matrix and bind materials.
             (void)scene->bindFrameData(f.cmd);
+            c->vulkan.frameScene = c->currentScene;
             c->vulkan.frameRecording = true;
             return {};
         }
         (void)scene->draw(f.cmd);
+        (void)scene->drawSkybox(f.cmd);
         finishFrame(c);
         return {};
     }
@@ -609,6 +656,10 @@ namespace NRE {
         c->vulkan.isDrawing = false;
         if (!c->vulkan.frameRecording) return {};   // renderFrame() skipped this frame
         c->vulkan.frameRecording = false;
+        // After the app's draw calls, so the sky only fills what they left empty.
+        if (Scene* scene = c->manager.get(c->vulkan.frameScene)) {
+            (void)scene->drawSkybox(c->vulkan.frames[c->vulkan.currentFrame % max_frames_in_flight].cmd);
+        }
         finishFrame(c);
         return {};
     }
@@ -689,6 +740,10 @@ namespace NRE {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         c->window.scrollDelta = 0.0f;   // scrollCallback adds this frame's scrolling during glfwPollEvents
+        c->window.keysPressed.reset();
+        c->window.keysReleased.reset();
+        c->window.buttonsPressed.reset();
+        c->window.buttonsReleased.reset();
         glfwPollEvents();
         glm::dvec2 cursor;
         glfwGetCursorPos(c->window.window, &cursor.x, &cursor.y);
@@ -1007,6 +1062,58 @@ namespace NRE {
         });
     }
 
+    Result<void> setSun(glm::vec3 direction, glm::vec3 color, float intensity) {
+        return getBoundScenePtr().transform([&](Scene* s) {
+            s->sunDirection = lightDirection(direction);
+            s->sunColor = color;
+            s->sunIntensity = intensity;
+        });
+    }
+
+    Result<void> setSunDirection(glm::vec3 direction) {
+        return getBoundScenePtr().transform([&](Scene* s) { s->sunDirection = lightDirection(direction); });
+    }
+
+    Result<glm::vec3> getSunDirection() {
+        return getBoundScenePtr().transform([](Scene* s) { return s->sunDirection; });
+    }
+
+    Result<Handel<Cubemap>> createCubemap(std::string right, std::string left, std::string top,
+                                          std::string bottom, std::string front, std::string back) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        Cubemap cubemap;
+        if (auto loaded = cubemap.load({std::move(right), std::move(left), std::move(top), std::move(bottom),
+                                        std::move(front), std::move(back)}); !loaded) {
+            return std::unexpected(loaded.error());
+        }
+        // RenderErrorPolicy::Ignore: a failed load returns success without an image. The empty handle means no skybox.
+        if (cubemap.getView() == VK_NULL_HANDLE) return Handel<Cubemap>{};
+        return c->manager.create(std::move(cubemap));
+    }
+
+    Result<void> destroyCubemap(Handel<Cubemap> cubemap) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        if (!c->manager.get(cubemap)) return {};
+        // Frames in flight may still sample it. Scenes using it notice the stale handle and drop the skybox.
+        vkDeviceWaitIdle(c->vulkan.device);
+        c->manager.destroy(cubemap, true);
+        return {};
+    }
+
+    Result<void> setSkybox(Handel<Cubemap> cubemap) {
+        auto s = getBoundScenePtr();
+        if (!s) return std::unexpected(s.error());
+        if (cubemap != Handel<Cubemap>{} && !context()->manager.get(cubemap)) {
+            auto error = ErrorHandeling::badHandle("cubemap", cubemap, "createCubemap()", std::source_location::current());
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);
+        }
+        (*s)->skybox = cubemap;   // bindFrameData points each frame's set at it once that frame is free
+        return {};
+    }
+
     Result<void> setCameraPosition(glm::vec3 position) {
         return getCamera().transform([&](Camera* cam) { cam->position = position; });
     }
@@ -1078,6 +1185,73 @@ namespace NRE {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         return c->window.scrollDelta;
+    }
+
+    Result<bool> isMouseButtonPressed(MouseButton button) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return c->window.buttonsPressed[int(button)];
+    }
+
+    Result<bool> isMouseButtonReleased(MouseButton button) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return c->window.buttonsReleased[int(button)];
+    }
+
+    Result<glm::vec2> getMousePosition() {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return glm::vec2(c->window.cursor);
+    }
+
+    Result<void> setCursorMode(CursorMode mode) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        int glfwMode = GLFW_CURSOR_NORMAL;
+        switch (mode) {
+            case CursorMode::Normal: glfwMode = GLFW_CURSOR_NORMAL; break;
+            case CursorMode::Hidden: glfwMode = GLFW_CURSOR_HIDDEN; break;
+            case CursorMode::Locked: glfwMode = GLFW_CURSOR_DISABLED; break;
+        }
+        glfwSetInputMode(c->window.window, GLFW_CURSOR, glfwMode);
+        // Locking (and unlocking) moves the cursor, so start over from where it is now: otherwise the next
+        // getMouseDelta would include that jump.
+        glfwGetCursorPos(c->window.window, &c->window.cursor.x, &c->window.cursor.y);
+        return {};
+    }
+
+    // Key's values are GLFW's key codes, so they're passed straight through. Checks the first and last key
+    // of every run of consecutive values.
+    static_assert(int(Key::Space) == GLFW_KEY_SPACE && int(Key::Apostrophe) == GLFW_KEY_APOSTROPHE
+                  && int(Key::Comma) == GLFW_KEY_COMMA && int(Key::Slash) == GLFW_KEY_SLASH
+                  && int(Key::Zero) == GLFW_KEY_0 && int(Key::Nine) == GLFW_KEY_9
+                  && int(Key::Semicolon) == GLFW_KEY_SEMICOLON && int(Key::Equal) == GLFW_KEY_EQUAL
+                  && int(Key::A) == GLFW_KEY_A && int(Key::Z) == GLFW_KEY_Z
+                  && int(Key::LeftBracket) == GLFW_KEY_LEFT_BRACKET && int(Key::RightBracket) == GLFW_KEY_RIGHT_BRACKET
+                  && int(Key::GraveAccent) == GLFW_KEY_GRAVE_ACCENT
+                  && int(Key::Escape) == GLFW_KEY_ESCAPE && int(Key::End) == GLFW_KEY_END
+                  && int(Key::CapsLock) == GLFW_KEY_CAPS_LOCK && int(Key::Pause) == GLFW_KEY_PAUSE
+                  && int(Key::F1) == GLFW_KEY_F1 && int(Key::F12) == GLFW_KEY_F12
+                  && int(Key::Keypad0) == GLFW_KEY_KP_0 && int(Key::KeypadEqual) == GLFW_KEY_KP_EQUAL
+                  && int(Key::LeftShift) == GLFW_KEY_LEFT_SHIFT && int(Key::Menu) == GLFW_KEY_MENU);
+
+    Result<bool> isKeyDown(Key key) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return glfwGetKey(c->window.window, int(key)) == GLFW_PRESS;
+    }
+
+    Result<bool> isKeyPressed(Key key) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return c->window.keysPressed[int(key)];
+    }
+
+    Result<bool> isKeyReleased(Key key) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return c->window.keysReleased[int(key)];
     }
 
     namespace {

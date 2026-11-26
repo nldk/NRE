@@ -47,8 +47,17 @@ namespace NRE {
         VkDescriptorSet frameSets[max_frames_in_flight]{};
         PerFrameBuffer UBO;
         PerFrameBuffer Lights;
+        // What binding 2 of each frame's set points at; empty = the default (black) cubemap. Kept as handles,
+        // not views: a destroyed cubemap's handle never matches again, even if Vulkan reuses its view's value.
+        Handel<Cubemap> skyboxInSet[max_frames_in_flight]{};
     public:
         Camera camera;
+        // Empty, or destroyed: no skybox. Shaders then see the default cubemap at binding 2.
+        Handel<Cubemap> skybox;
+        // Same convention as a directional light. Intensity 0 means no sun.
+        glm::vec3 sunDirection = glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f));
+        glm::vec3 sunColor{1.0f};
+        float sunIntensity = 0.0f;
         void addInstance(Handel<Instance> instance);
         void removeInstance(Handel<Instance> instance);
         const std::vector<Handel<Instance>>& getInstances() const { return instances; }
@@ -60,6 +69,9 @@ namespace NRE {
         Result<void> bindFrameData(VkCommandBuffer commandBuffer);
         // bindFrameData, then every visible instance.
         Result<void> draw(VkCommandBuffer commandBuffer);
+        // Draws the skybox behind everything drawn so far, if the scene has one (3D only). Binds the skybox
+        // pipeline, so draw it last. Needs bindFrameData() earlier in the same frame.
+        Result<void> drawSkybox(VkCommandBuffer commandBuffer);
         Result<void> createUboAndLights();
     };
 }

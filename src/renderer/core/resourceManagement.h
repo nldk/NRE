@@ -9,6 +9,7 @@
 #include "scene/model.h"
 #include "gpu/buffer.h"
 #include "gpu/texture.h"
+#include "gpu/cubemap.h"
 #include "scene/scene.h"
 #include "scene/light.h"
 
@@ -45,7 +46,7 @@ namespace NRE {
     };
     class ResourceManager {
         static uint64_t nextid;
-        std::tuple<Pool<Shader>, Pool<Pipeline>, Pool<Model>,Pool<Buffer>,Pool<Scene>, Pool<Texture>, Pool<Material>, Pool<Instance>, Pool<Light>> pools;
+        std::tuple<Pool<Shader>, Pool<Pipeline>, Pool<Model>,Pool<Buffer>,Pool<Scene>, Pool<Texture>, Pool<Material>, Pool<Instance>, Pool<Light>, Pool<Cubemap>> pools;
     public:
         template<class T>
         Handel<T> create(T obj) { return std::get<Pool<T>>(pools).create(std::move(obj)); }

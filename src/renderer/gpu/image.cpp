@@ -16,13 +16,16 @@ namespace NRE {
         }
     }
 
-    Result<void> Image::createImage(uint32_t width, uint32_t height, VkFormat format,VkImageUsageFlags usage, uint32_t mipLevels) {
+    Result<void> Image::createImage(uint32_t width, uint32_t height, VkFormat format,VkImageUsageFlags usage, uint32_t mipLevels,
+                                    bool cubemap) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
 
         this->format = format;
         this->mipLevels = mipLevels;
         this->extent = {width,height};
+        this->cubemap = cubemap;
+        const uint32_t layers = getLayers();
 
         VkImageCreateInfo vkImageCreateInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         vkImageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -31,7 +34,8 @@ namespace NRE {
         vkImageCreateInfo.extent.width = width;
         vkImageCreateInfo.extent.height = height;
         vkImageCreateInfo.extent.depth = 1;
-        vkImageCreateInfo.arrayLayers = 1;
+        vkImageCreateInfo.arrayLayers = layers;
+        if (cubemap) vkImageCreateInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
         vkImageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         vkImageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         vkImageCreateInfo.usage = usage;
@@ -55,9 +59,9 @@ namespace NRE {
 
         VkImageViewCreateInfo imageViewCreateInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         imageViewCreateInfo.image = image;
-        imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        imageViewCreateInfo.viewType = cubemap ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
         imageViewCreateInfo.format = format;
-        imageViewCreateInfo.subresourceRange = {aspectFor(format),0,mipLevels,0,1};
+        imageViewCreateInfo.subresourceRange = {aspectFor(format),0,mipLevels,0,layers};
 
         if (VkResult r = vkCreateImageView(c->vulkan.device,&imageViewCreateInfo,nullptr,&view); r != VK_SUCCESS) {
             // Don't leave a half-made image behind.

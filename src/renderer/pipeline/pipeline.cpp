@@ -4,7 +4,8 @@
 #include "core/errorHandling.h"
 
 namespace NRE {
-    Result<void> Pipeline::createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader,const VertexLayout& layout = {}) {
+    Result<void> Pipeline::createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader, const VertexLayout& layout,
+                                          VkCullModeFlags cullMode, VkCompareOp depthCompare, bool depthWrite) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         auto vertex = c->manager.get(vertexShader);
@@ -39,7 +40,7 @@ namespace NRE {
         VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
         rs.polygonMode = VK_POLYGON_MODE_FILL;
 
-        rs.cullMode = VK_CULL_MODE_BACK_BIT;
+        rs.cullMode = cullMode;
         rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rs.lineWidth = 1.0f;
 
@@ -96,8 +97,8 @@ namespace NRE {
 
         VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         ds.depthTestEnable = VK_TRUE;
-        ds.depthWriteEnable = VK_TRUE;
-        ds.depthCompareOp = VK_COMPARE_OP_LESS;
+        ds.depthWriteEnable = depthWrite ? VK_TRUE : VK_FALSE;
+        ds.depthCompareOp = depthCompare;
 
         VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
         gp.pNext = &rci;

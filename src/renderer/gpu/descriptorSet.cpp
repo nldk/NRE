@@ -45,7 +45,7 @@ namespace NRE {
         VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         frameSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         frameSets},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialSets},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialSets + frameSets},   // frame sets: the skybox
         };
         VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         pci.maxSets       = frameSets + materialSets;
