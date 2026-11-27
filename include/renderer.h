@@ -323,20 +323,22 @@ namespace NRE {
     RENDERER_API Result<void> setSceneLighting(SceneLighting lighting);
     RENDERER_API Result<SceneLighting> getSceneLighting();
     // How far from the camera the bound scene's sun casts shadows, in metres. 0 turns sun shadows off; must not be
-    // negative. Default 20 m (Small) / 500 m (Landscape); setSceneLighting resets it. The number of cascades follows from it (up to 4); shorter
-    // distances give sharper shadows. Only the sun casts shadows, and only in Render_3D.
+    // negative. Default 20 m (Small) / 500 m (Landscape); setSceneLighting resets it. The number of cascades follows
+    // from it (up to 4); shorter distances give sharper shadows. Only the sun casts shadows, and only in Render_3D.
     RENDERER_API Result<void> setShadowDistance(float meters);
     // Whether an instance casts sun shadows (it still receives them). Default true; e.g. off for grass, for speed.
     // drawModel() always casts.
     RENDERER_API Result<void> setCastsShadows(Handel<Instance> instance, bool castsShadows);
 
-    // Distance haze (aerial perspective) on the bound scene: far things fade into the sky's colour, warmer toward the
-    // sun. visibility: metres at which the haze hides almost everything (about 95%); 0 turns it off. height: how thick
-    // the haze layer is; it thins out above that height (metres above y = 0), so mountain tops poke out of valley
-    // haze. Must not be negative (visibility) / must be greater than 0 (height). Default off (Small) / 8000 m, 300 m
-    // (Landscape); setSceneLighting resets it. nreShade applies it (nreApplyHaze in nre/lighting.glsl, for shaders
-    // built from the pieces). The procedural sky gets the same haze near the horizon, so terrain and sky meet without
-    // a seam; a skybox is shown as authored (a photo sky already has its own haze).
+    // Distance haze (aerial perspective) on the bound scene: far things fade into the sky's colour, brighter, in the
+    // sun's colour, toward the sun. visibility: metres at which the haze hides almost everything (about 95%); 0 turns
+    // it off. height: how thick the haze layer is; it thins out above that height (metres above y = 0), so mountain
+    // tops poke out of valley haze. Must not be negative (visibility) / must be greater than 0 (height). Default off
+    // (Small) / 8000 m, 300 m (Landscape); setSceneLighting resets it. nreShade applies it (nreApplyHaze in
+    // nre/lighting.glsl, for shaders built from the pieces). The procedural sky gets the same haze near the horizon,
+    // so terrain and sky meet without a seam; a skybox is shown as authored (a photo sky already has its own haze).
+    // With a colour sky or a cubemap sky, hazed objects meet the (exposure-invariant) background exactly only at
+    // exposure 1.
     RENDERER_API Result<void> setHaze(float visibility, float height = 300.0f);
 
     // Tone mapping. Shaders write linear light (values above 1 are fine, and must not tone map themselves);

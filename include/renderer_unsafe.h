@@ -30,6 +30,8 @@ namespace NRE::Unsafe {
     // Called every frame inside a render pass on the window (swapchain format, with the window's depth buffer), after
     // the tone-mapped scene is there: bind your own pipeline and state.
     // With a render target set, the window pass only contains what the callback draws. Pass nullptr to remove it.
+    // Pipelines made with NRE's createPipeline declare dynamic cull mode: call vkCmdSetCullMode before drawing with them
+    // here (the last pass leaves it at NONE).
     // Depth is reverse-Z: cleared to 0, nearer is greater, so depth-tested pipelines must use VK_COMPARE_OP_GREATER.
     RENDERER_API Result<void> registerFrameCallback(void (*frameCallback)(VkCommandBuffer commandBuffer));
 

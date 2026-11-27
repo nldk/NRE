@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 # Bump on every release, together with a matching git tag (vX.Y.Z).
 # While 0.x: bump the minor for breaking API/ABI changes, the patch for fixes.
-project(VulkanRenderer VERSION 0.2.0 LANGUAGES CXX)
+project(VulkanRenderer VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

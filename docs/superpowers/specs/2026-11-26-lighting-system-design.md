@@ -1,6 +1,6 @@
 # Lighting system design
 
-Date: 2026-11-26. Status: awaiting the user's approval.
+Date: 2026-11-26. Status: implemented (see the plan and ledger for deviations).
 
 ## Intent
 

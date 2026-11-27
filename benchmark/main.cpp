@@ -19,7 +19,7 @@
 // Prints a summary and writes every frame to a CSV; benchmark/plot.py turns that into graphs.
 // Measure a Release build: Debug adds validation layers and per-call misuse checks.
 //
-// Usage: nre_benchmark [--instances N] [--frames F] [--csv PATH] [scenario ...]
+// Usage: nre_benchmark [--instances N] [--frames F] [--csv PATH] [--sun] [scenario ...]
 
 #include "renderer.h"
 
@@ -207,6 +207,8 @@ namespace {
         double updateMs, renderMs;
     };
 
+    bool useSun = false;
+
     std::vector<FrameSample> run(Scenario scenario, Variant variant, int count, int frames) {
         const ApiMode mode = variant == Variant::Scene ? ApiMode::SceneMode : ApiMode::FunctionDrawMode;
         check(setRenderConfig({RenderMode::Render_3D, mode, RenderErrorPolicy::Return, false,
@@ -218,6 +220,8 @@ namespace {
         check(bindPipeline(check(createPipeline(vertex, fragment), "createPipeline")), "bindPipeline");
         if (mode == ApiMode::SceneMode) check(createScene(), "createScene");   // FunctionDrawMode makes its own
         check(addLightToScene(check(createDirectionalLight({-0.5f, -1.0f, -0.3f}), "createDirectionalLight")), "addLightToScene");
+
+        if (useSun) check(setSun({-0.4f, -1.0f, -0.3f}), "setSun");
 
         std::vector<Handel<Model>> models{check(createModel(ASSET_DIR "/Box.glb"), "createModel")};
         if (scenario == Scenario::Mixed || scenario == Scenario::Game) {
@@ -304,9 +308,10 @@ namespace {
     }
 
     void usage() {
-        std::println("Usage: nre_benchmark [--instances N] [--frames F] [--csv PATH] [scenario ...]");
+        std::println("Usage: nre_benchmark [--instances N] [--frames F] [--csv PATH] [--sun] [scenario ...]");
         std::println("  --instances N  objects per scenario (default 5000)");
         std::println("  --frames F     measured frames per run (default 600), after {} warm-up frames", warmupFrames);
+        std::println("  --sun          set a sun on the scene (measures the lit path; default off)");
         std::println("  --csv PATH     per-frame results (default nre_benchmark.csv); plot with benchmark/plot.py");
         std::println("Scenarios (default: all):");
         for (const ScenarioInfo& s : allScenarios) std::println("  {:<12} {}", s.name, s.description);
@@ -326,6 +331,8 @@ int main(int argc, char** argv) {
             count = std::max(1, std::atoi(argv[++i]));
         } else if (arg == "--frames" && hasValue) {
             frames = std::max(1, std::atoi(argv[++i]));
+        } else if (arg == "--sun") {
+            useSun = true;
         } else if (arg == "--csv" && hasValue) {
             csvPath = argv[++i];
         } else if (auto s = std::ranges::find(allScenarios, arg, &ScenarioInfo::name); s != std::end(allScenarios)) {
