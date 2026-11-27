@@ -89,7 +89,22 @@ static void pixelRay() {
     CHECK_NEAR(topLeft.direction.x / -topLeft.direction.z, -std::tan(glm::radians(30.0f)) * 4.0f / 3.0f, 1e-3);
 }
 
+// A far camera must give the same ray as one at the origin (no cancellation of two large positions).
+static void pixelRayFarFromOrigin() {
+    glm::mat4 P = NRE::LightingMath::reverseZPerspective(glm::radians(60.0f), 4.0f / 3.0f, 0.1f);
+    glm::vec3 far(1e4f, 3.0f, 1e4f);
+    glm::mat4 nearView = glm::lookAt(glm::vec3(0, 3, 0), glm::vec3(0.3f, 3.1f, -1), glm::vec3(0, 1, 0));
+    glm::mat4 farView = nearView * glm::translate(glm::mat4(1.0f), glm::vec3(0, 3, 0) - far);   // same orientation, moved
+    for (glm::vec2 pixel : {glm::vec2(10, 20), glm::vec2(320, 240), glm::vec2(600, 450)}) {
+        Ray a = rayFromPixel(pixel, {640, 480}, P, nearView);
+        Ray b = rayFromPixel(pixel, {640, 480}, P, farView);
+        CHECK_NEAR(b.origin.x, far.x, 1e-2); CHECK_NEAR(b.origin.z, far.z, 1e-2);
+        CHECK(glm::length(glm::cross(a.direction, b.direction)) < 1e-5f);   // sin of the angle between them
+    }
+}
+
 int main() {
+    pixelRayFarFromOrigin();
     triangleHit();
     triangleMiss();
     triangleEdgeAndParallel();

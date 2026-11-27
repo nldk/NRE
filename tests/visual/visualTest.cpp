@@ -1295,7 +1295,6 @@ NRE_SCENARIO(pick_hit) {
         CHECK(hit->instance == boxes[i]);
         CHECK(std::fabs(hit->point.z - (positions[i].z + 0.5f)) < 1e-3f);
         CHECK(std::fabs(hit->point.x - positions[i].x) <= 0.5f + 1e-3f);
-        CHECK(nearF(hit->distance, glm::length(hit->point), 1e-3f));
     }
     // Straight ahead of the camera the distance is exactly the camera-to-face distance.
     TRY(translateInstance(boxes[0], glm::vec3(1.5f, -0.3f, 0.0f)));   // box 0 now at (0, 0, -4)
@@ -1356,18 +1355,60 @@ NRE_SCENARIO(pick_hidden_and_destroyed) {
     return true;
 }
 
-// A 320x240 target (the window is 640x480, so the aspect differs): pixels are the target's.
+// A 400x200 target (aspect 2; the window's is 4:3): pixels are the target's. The expected pixel is worked out by hand
+// from the 60 degree vertical fov, the target size and the box position, not from getProjectionMatrix(), so a
+// projection with the wrong aspect would miss the box.
 NRE_SCENARIO(pick_render_target) {
     Session session(ApiMode::SceneMode);
-    TRY(Unsafe::setRenderTarget(320, 240));
+    TRY(Unsafe::setRenderTarget(400, 200));
     auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
     TRY(setCameraPosition(glm::vec3(0.0f)));
     TRY(setCameraRotation(0.0f, 0.0f));
-    glm::vec3 position(-1.0f, 0.4f, -4.0f);
+    glm::vec3 position(-2.2f, 0.3f, -4.0f);
     auto box = addBox(model, position);
-    auto hit = TRY(pickInstance(projectToPixel(position, 320.0f, 240.0f)));
+    const float tanHalfFov = std::tan(1.0471976f / 2.0f), aspect = 400.0f / 200.0f;
+    glm::vec3 face = position + glm::vec3(0.0f, 0.0f, 0.5f);   // the middle of the front face
+    float ndcX = face.x / -face.z / (tanHalfFov * aspect);
+    float ndcY = -face.y / -face.z / tanHalfFov;               // +Y is up in the world, down in the image
+    glm::vec2 pixel((ndcX * 0.5f + 0.5f) * 400.0f, (ndcY * 0.5f + 0.5f) * 200.0f);
+    auto hit = TRY(pickInstance(pixel));
     CHECK(hit.has_value() && hit->instance == box);
-    CHECK(!TRY(pickInstance(glm::vec2(300.0f, 220.0f))).has_value());
+    if (hit) CHECK(glm::length(hit->point - face) < 2e-3f);
+    // Just outside the box's left edge (front face) and right edge (its far corner, as the right side face is seen) at that height.
+    float left = ((-2.7f / 3.5f / (tanHalfFov * aspect)) * 0.5f + 0.5f) * 400.0f;
+    float right = ((-1.7f / 4.5f / (tanHalfFov * aspect)) * 0.5f + 0.5f) * 400.0f;
+    CHECK(!TRY(pickInstance(glm::vec2(left - 3.0f, pixel.y))).has_value());
+    CHECK(!TRY(pickInstance(glm::vec2(right + 3.0f, pixel.y))).has_value());
+    CHECK(TRY(pickInstance(glm::vec2(left + 3.0f, pixel.y))).has_value());
+    CHECK(TRY(pickInstance(glm::vec2(right - 3.0f, pixel.y))).has_value());
+    return true;
+}
+
+// Scaled and rotated instances: distance and point are in world units, not model units.
+NRE_SCENARIO(pick_scaled) {
+    Session session(ApiMode::SceneMode);
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    glm::vec2 centre(kWidth / 2.0f, kHeight / 2.0f);
+    auto stretched = addBox(model, glm::vec3(0.0f, 0.0f, -4.0f));
+    TRY(scaleInstance(stretched, glm::vec3(1.0f, 1.0f, 3.0f)));   // front face at z = -4 + 1.5
+    auto hit = TRY(pickInstance(centre));
+    CHECK(hit.has_value() && hit->instance == stretched);
+    CHECK(hit && nearF(hit->distance, 2.5f, 1e-3f));
+    CHECK(hit && std::fabs(hit->point.z + 2.5f) < 1e-3f);
+    TRY(setVisibility(stretched, false));
+
+    // Off-axis, scaled by 2 and turned 90 degrees about Y (a cube looks the same): its front face is at z = -5.
+    glm::vec3 position(3.0f, 0.0f, -6.0f);
+    auto big = addBox(model, position);
+    TRY(scaleInstance(big, glm::vec3(2.0f)));
+    TRY(rotateInstance(big, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f)));
+    glm::vec3 face(3.0f, 0.0f, -5.0f);
+    auto offAxis = TRY(pickInstance(projectToPixel(face, float(kWidth), float(kHeight))));
+    CHECK(offAxis.has_value() && offAxis->instance == big);
+    CHECK(offAxis && glm::length(offAxis->point - face) < 5e-3f);
+    CHECK(offAxis && nearF(offAxis->distance, glm::length(face), 1e-3f));
     return true;
 }
 

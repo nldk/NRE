@@ -27,7 +27,9 @@ namespace NRE::Picking {
         glm::vec3 viewPoint = glm::vec3(nearPoint) / nearPoint.w;
         Ray ray;
         ray.origin = glm::vec3(inverseView[3]);
-        ray.direction = glm::normalize(glm::vec3(inverseView * glm::vec4(viewPoint, 1.0f)) - ray.origin);
+        // The camera is at the origin in view space, so only the rotation is needed (subtracting two world positions
+        // far from the origin loses precision).
+        ray.direction = glm::normalize(glm::mat3(inverseView) * viewPoint);
         return ray;
     }
 
