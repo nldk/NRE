@@ -22,7 +22,8 @@ inline glm::vec3 toneMapACES(glm::vec3 c) {
 }
 
 // Inverse of the fit: solves (2.43y - 2.51)x^2 + (0.59y - 0.03)x + 0.14y = 0 for the positive root.
-// y is clamped below 1 because the fit only reaches 1 at infinity.
+// y is clamped below 1 because the fit reaches 1 at x ~ 7.24 and is clamped beyond
+// it: the inverse has no finite value at 1.
 inline float inverseToneMapACES(float y) {
     y = std::clamp(y, 0.0f, 0.999f);
     float a = 2.43f * y - 2.51f; // always negative on [0, 0.999]

@@ -185,15 +185,17 @@ namespace NRE {
         c->vulkan.views = c->vulkan.swapchain.get_image_views().value();
         c->window.framebufferResized = false;
         updateProjection(c);
-        if (auto depth = createDepthImage(c); !depth) return depth;
-        if (auto hdr = c->vulkan.toneMap.resize(sceneExtent(c)); !hdr) return hdr;   // the window's size, without a render target
 
-        // renderDone is indexed per swapchain image, so it has to match the new image count
+        // renderDone is indexed per swapchain image, so it has to match the new image count. Done before the
+        // resizes below, which can fail and return early.
         for (VkSemaphore s : c->vulkan.renderDone) vkDestroySemaphore(c->vulkan.device, s, nullptr);
         c->vulkan.renderDone.resize(c->vulkan.images.size());
         VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         for (VkSemaphore& s : c->vulkan.renderDone)
             vkCreateSemaphore(c->vulkan.device, &sci, nullptr, &s);
+
+        if (auto depth = createDepthImage(c); !depth) return depth;
+        if (auto hdr = c->vulkan.toneMap.resize(sceneExtent(c)); !hdr) return hdr;   // the window's size, without a render target
         return {};
     }
     Result<void> init() {

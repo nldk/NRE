@@ -73,4 +73,7 @@ namespace NRE {
         bool ready() const;
         void destroy();
     };
+
+    // The IBL filters read the sky cubemap as their source.
+    static_assert(Sky::cubemapSize == Ibl::sourceSize);
 }

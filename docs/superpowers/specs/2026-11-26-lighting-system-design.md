@@ -229,8 +229,8 @@ tone-map pass → unsafe callback → present`. `FunctionDrawMode` queues `drawM
 
 ### The include
 - Shipped in the repo (e.g. `shaders/include/nre/lighting.glsl`); `nre_compile_shaders` adds the include path so
-  projects that fetch NRE get it too. Declares the set 0/1 bindings, `Surface`, `nreSurface(...)`,
-  `nreShade(Surface)`, and the pieces (`nreSunShadow`, `nreAmbient`, `nreHaze`, BRDF terms, `nreAlphaTest`).
+  projects that fetch NRE get it too. Declares the set 0/1 bindings, `Surface`, `nreMaterialSurface(...)` (which also does the alpha test),
+  `nreShade(Surface)`, and the pieces (`nreSunShadow`, `nreAmbient`, `nreApplyHaze`, BRDF terms).
 - Carries a version define checked against the library at pipeline creation in Debug if feasible.
 
 ### Build order (each step leaves the renderer working)

@@ -39,6 +39,7 @@ if(NRE_UNSAFE_API)
     foreach(scenario capture-clear baseline-car baseline-skybox far-object
                      exposure-brighter sky-color function-mode-car skybox-exposure resize-target passthrough-2d
                      alpha-mask double-sided roughness no-uv-mesh demo-car-lit normal-map metallic-texture
+                     smooth-metal-highlight tiny-exposure-background
                      shadow-basic shadow-function-mode shadow-off shadow-no-cast shadow-alpha shadow-noon
                      shadow-far shadow-stable shadow-cascade-borders scene-lighting-defaults
                      sky-noon sky-sunset sky-night sun-disk sky-follows-sun sky-elevations lit-low-sun

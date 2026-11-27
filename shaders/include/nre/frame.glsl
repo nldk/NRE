@@ -5,6 +5,10 @@
 #ifndef NRE_FRAME_GLSL
 #define NRE_FRAME_GLSL
 
+// The shader API version of this include (the library version it shipped with: 0.3). Test it in your own shaders,
+// e.g. #if NRE_SHADER_API_VERSION < 3, to fail at compile time against an older include.
+#define NRE_SHADER_API_VERSION 3
+
 // Must match GpuLight in src/renderer/gpu/UBOAndSSBO.h.
 struct NreLight {
     vec4 position;   // w = 0: directional, xyz = the way the light travels. w = 1: point light, xyz = position

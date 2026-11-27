@@ -374,7 +374,9 @@ vec3 nreCascadeDebugColor(vec3 worldPos) {
 }
 
 vec3 nreShade(Surface s) {
-    return nreApplyHaze(nreSunLight(s) + nreLights(s) + nreAmbient(s), s.position);
+    // Kept finite: the HDR target is half-float, where anything past 65504 is stored as inf and the tone map can't
+    // recover it (a very smooth metal's highlight, a light right at a surface).
+    return min(nreApplyHaze(nreSunLight(s) + nreLights(s) + nreAmbient(s), s.position), vec3(60000.0));
 }
 
 #endif

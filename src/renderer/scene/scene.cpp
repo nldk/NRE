@@ -119,7 +119,8 @@ namespace NRE {
         fd.skyParams = glm::vec4(float(uint32_t(skySource)), ibl ? float(ibl->specularMips()) : 0.0f, skyBrightness, 0.0f);
         // Haze (nreApplyHaze, and the procedural sky's horizon in sky.frag): extinction per metre at y = 0 and below,
         // thinning out exponentially above it (1 / e per hazeHeight).
-        fd.hazeParams = glm::vec4(LightingMath::hazeDensityForVisibility(hazeVisibility), 1.0f / hazeHeight, 0.0f, 0.0f);
+        fd.hazeParams = is3D ? glm::vec4(LightingMath::hazeDensityForVisibility(hazeVisibility), 1.0f / hazeHeight, 0.0f, 0.0f)
+                            : glm::vec4(0.0f);   // no haze in 2D
         if (auto r = UBO.write(frame, &fd, sizeof(fd)); !r) return r;
 
         // The caller waited on this frame's fence, so its set is free to rewrite. The procedural sky of frame slot f

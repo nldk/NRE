@@ -70,7 +70,8 @@ namespace NRE {
         SkyBinding skyInSet[max_frames_in_flight]{};
     public:
         Camera camera;
-        // Empty, or destroyed: no skybox. Shaders then see the default cubemap at binding 2.
+        // Empty, or destroyed: no skybox. Landscape then shows the procedural sky at binding 2 (or, with proceduralSky
+        // off, the default cubemap).
         Handel<Cubemap> skybox;
         // Same convention as a directional light. Intensity 0 means no sun.
         glm::vec3 sunDirection = glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f));

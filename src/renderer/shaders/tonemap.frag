@@ -12,5 +12,9 @@ vec3 toneMapACES(vec3 x) {
 
 void main() {
     vec3 color = texelFetch(hdr, ivec2(gl_FragCoord.xy), 0).rgb;
+    // The half-float target holds +inf for anything past 65504 (a very smooth highlight, a tiny exposure), and ACES of
+    // inf is NaN: keep inf finite and drop NaN to black.
+    color = mix(color, vec3(0.0), isnan(color));
+    color = min(color, vec3(65504.0));
     outColor = vec4(params.y != 0.0 ? color : toneMapACES(color * params.x), 1.0);
 }

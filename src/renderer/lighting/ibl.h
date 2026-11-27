@@ -20,16 +20,19 @@ namespace NRE {
     //     skybox (setSkybox). Its contents never change afterwards, and it's destroyed with the cubemap
     //     (destroyCubemap waits for the GPU first).
     class Ibl {
+    public:
+        static constexpr uint32_t specularMipCount = 5;   // the specular cubemap's mip levels (one prefilter pass each)
+    private:
         Image irradiance, specular;
         // The filter passes' sets, from this Ibl's own small pool, so destroying it gives them back.
         VkDescriptorPool pool = VK_NULL_HANDLE;
         VkDescriptorSet sourceSet = VK_NULL_HANDLE;   // iblSource.comp (filterLdr)
         VkDescriptorSet irradianceSet = VK_NULL_HANDLE;
-        VkDescriptorSet prefilterSets[5]{};
+        VkDescriptorSet prefilterSets[specularMipCount]{};
         VkImageView setsSource = VK_NULL_HANDLE;      // the source the irradiance and prefilter sets read
     public:
         static constexpr uint32_t irradianceSize = 32;
-        static constexpr uint32_t specularSize = 128, specularMipCount = 5;
+        static constexpr uint32_t specularSize = 128;
         // The size of the linear HDR cubemap the filters read (the procedural sky's, and the copy filterLdr makes).
         static constexpr uint32_t sourceSize = 256;
 

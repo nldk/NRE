@@ -201,7 +201,6 @@ namespace NRE {
     struct Shader;
     class Pipeline;
     struct Model;
-    struct Instance;
     struct Light;
     class Scene;
     class Texture;

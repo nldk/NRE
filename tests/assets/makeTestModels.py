@@ -4,6 +4,7 @@
   alphaQuad.gltf       2 m double-sided quad, base texture with alpha 0 in a 4x4 checker, alphaMode MASK, cutoff 0.5
   alphaQuad.png        the checker texture (opaque orange / transparent cells)
   materialSpheres.gltf two white spheres side by side: roughness 0.1 (x = -0.7) and 0.9 (x = +0.7), metallic 0
+  chromeSphere.gltf    one 1 m sphere, metallic 1, roughness 0 (the smoothest a material can be)
   noUv.obj             unit cube with no vt and no vn
   normalQuads.gltf     five 0.5 m quads in a row, constant normal maps: flat, tilted 45 deg toward +X, -X, +Y, -Y
   normalQuads.png      their normal map (one column per quad)
@@ -144,6 +145,25 @@ def write_material_spheres():
     (OUT / "materialSpheres.gltf").write_text(json.dumps(gltf, indent=1))
 
 
+def write_chrome_sphere():
+    pos, nrm, uv, idx = uv_sphere(0.5)
+    data, views, accessors = mesh_buffers(pos, nrm, uv, idx)
+    gltf = {
+        "asset": {"version": "2.0", "generator": "makeTestModels.py"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0, "name": "chrome"}],
+        "meshes": [{"name": "chrome", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+                                                      "indices": 3, "material": 0, "mode": 4}]}],
+        "materials": [{"name": "chrome", "pbrMetallicRoughness": {
+            "baseColorFactor": [0.95, 0.95, 0.95, 1], "metallicFactor": 1.0, "roughnessFactor": 0.0}}],
+        "accessors": accessors,
+        "bufferViews": views,
+        "buffers": [{"byteLength": len(data), "uri": data_uri(data)}],
+    }
+    (OUT / "chromeSphere.gltf").write_text(json.dumps(gltf, indent=1))
+
+
 def write_no_uv_obj():
     # Unit cube centred on the origin; positions and faces only (no vt, no vn).
     v = [(-.5, -.5, -.5), (.5, -.5, -.5), (.5, .5, -.5), (-.5, .5, -.5),
@@ -247,6 +267,7 @@ def write_metal_quads():
 if __name__ == "__main__":
     write_alpha_quad()
     write_material_spheres()
+    write_chrome_sphere()
     write_no_uv_obj()
     write_normal_quads()
     write_metal_quads()

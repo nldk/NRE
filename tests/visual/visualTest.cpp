@@ -231,6 +231,45 @@ NRE_SCENARIO(sky_color) {
     return true;
 }
 
+// A metallic, roughness 0 sphere: its highlights are far above the half-float range (a grazing sun at the lobe's
+// peak, or a point light a few centimetres from the surface). They must stay bright, not NaN -> black.
+NRE_SCENARIO(smooth_metal_highlight) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSkyColor(glm::vec3(0.02f)));
+    TRY(setSun(glm::vec3(-1.0f, 0.0f, -0.2f), glm::vec3(1.0f), 3.0f));
+    placeModel(TEST_ASSET_DIR "/chromeSphere.gltf", glm::vec3(0.0f, 0.0f, -1.2f));
+    // The sphere's front is at z = -0.7: the light is 2 cm in front of it, straight ahead of the camera.
+    Handel<Light> lamp = TRY(createPointLight(glm::vec3(0.0f, 0.0f, -0.68f), glm::vec3(1.0f), 10.0f));
+    TRY(addLightToScene(lamp));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    savePng(image, outDir() + "/smooth-metal-highlight.png");
+    CHECK(maxLuminance(image, 0, 0, kWidth, kHeight) > 0.9f);
+    // The middle of the highlight, round the pixel under the light: bright everywhere, with no NaN.
+    for (uint32_t y = kHeight / 2 - 2; y <= kHeight / 2 + 2; ++y) {
+        for (uint32_t x = kWidth / 2 - 2; x <= kWidth / 2 + 2; ++x) {
+            glm::vec3 p = image.at(x, y);
+            CHECK(!glm::any(glm::isnan(p)));
+            CHECK(luminance(p) > 0.9f);
+        }
+    }
+    return true;
+}
+
+// A tiny exposure scales the colour sky far past the half-float range: the background must stay the sky colour,
+// not NaN -> black.
+NRE_SCENARIO(tiny_exposure_background) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("flat.vert.spv", "flat.frag.spv");
+    TRY(setSkyColor({0.8f, 0.2f, 0.1f}));
+    TRY(setExposure(1e-5f));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    for (const glm::vec3& p : image.pixels) CHECK(!glm::any(glm::isnan(p)) && luminance(p) > 0.3f);
+    return true;
+}
+
 // baseline-car through drawInstance: the queued draws give the same frame.
 NRE_SCENARIO(function_mode_car) {
     Session session(ApiMode::FunctionDrawMode);
