@@ -1,0 +1,20 @@
+[package]
+name = "nre"
+description = "Safe Rust bindings for the NRE renderer, over its C API (libnre_c)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[dependencies]
+nre-sys = { path = "../nre-sys" }
+glam = { version = "0.34", optional = true }
+mint = { version = "0.5.9", optional = true }
+
+[features]
+# From/Into between nre's math types and glam's / mint's. Off by default.
+glam = ["dep:glam"]
+mint = ["dep:mint"]
+
+[package.metadata.docs.rs]
+all-features = true

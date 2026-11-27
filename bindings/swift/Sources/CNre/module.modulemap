@@ -1,0 +1,7 @@
+// The C API (include/nre.h) as a Clang module. `link "nre_c"` makes everything that imports it link -lnre_c;
+// where the linker finds libnre_c comes from NRE_LIB_DIR (see Package.swift) or the system's library path.
+module CNre [system] {
+    header "shim.h"
+    link "nre_c"
+    export *
+}

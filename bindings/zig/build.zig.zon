@@ -1,0 +1,13 @@
+.{
+    .name = .nre,
+    .version = "0.3.0",
+    .fingerprint = 0x9dd9b19b059d9e45, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}
