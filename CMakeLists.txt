@@ -266,6 +266,34 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # ---------------------------------------------------------------------------
+# C API: libnre_c (include/nre.h), plain C wrappers over librenderer for C apps
+# and other languages' FFIs. Link NRE::c; it loads librenderer itself.
+# ---------------------------------------------------------------------------
+option(NRE_C_API "Build libnre_c: the C API in nre.h, for C and other languages" ON)
+if(NRE_C_API)
+    add_library(nre_c SHARED ${CMAKE_CURRENT_SOURCE_DIR}/src/capi/nre_c.cpp)
+    add_library(NRE::c ALIAS nre_c)
+    # Only nre.h is needed to use it: C apps don't get librenderer's C++ headers or glm.
+    target_include_directories(nre_c PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(nre_c PRIVATE renderer)
+    # nre.h's NRE_C_EXPORT: dllexport while building it (Windows).
+    target_compile_definitions(nre_c PRIVATE NRE_C_BUILDING)
+    # Same version and SONAME rules as librenderer. It finds librenderer next to itself ($ORIGIN).
+    set_target_properties(nre_c PROPERTIES
+        OUTPUT_NAME               nre_c
+        VERSION                   ${PROJECT_VERSION}
+        SOVERSION                 ${NRE_SOVERSION}
+        CXX_VISIBILITY_PRESET     hidden
+        VISIBILITY_INLINES_HIDDEN ON
+        BUILD_RPATH               "$ORIGIN"
+        INSTALL_RPATH             "$ORIGIN"
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(nre_c PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Demo app and benchmark: skipped automatically when another project fetches NRE.
 # ---------------------------------------------------------------------------
 if(PROJECT_IS_TOP_LEVEL)

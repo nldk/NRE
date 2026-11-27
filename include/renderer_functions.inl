@@ -7,6 +7,8 @@
 // Adding a function to renderer.h or renderer_unsafe.h? Add it here too, without default arguments.
 // The library won't compile if an entry's signature doesn't match the header, and an app using
 // NRE::renderer_dynamic won't link if it calls a function that's missing here.
+// Safe-API functions also need a C wrapper: declare it in nre.h and define it in src/capi/nre_c.cpp.
+// Nothing checks that one, so a missing wrapper only shows up as a missing nreXxx symbol.
 
 NRE_FUNCTION(Result<void>, setRenderConfig, (RenderConfig config), (config))
 NRE_FUNCTION(Result<void>, init, (), ())
