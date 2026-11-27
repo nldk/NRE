@@ -237,8 +237,11 @@ namespace NRE {
         std::string extension = std::filesystem::path(path).extension().string();
         std::ranges::transform(extension, extension.begin(), [](unsigned char ch) { return std::tolower(ch); });
 
-        if (extension == ".gltf" || extension == ".glb") return loadGltf(path);
-        if (extension == ".obj") return loadObj(path);
+        if (extension == ".gltf" || extension == ".glb" || extension == ".obj") {
+            auto model = extension == ".obj" ? loadObj(path) : loadGltf(path);
+            if (model) for (Mesh& mesh : model->meshes) mesh.computeBounds();
+            return model;
+        }
 
         return std::unexpected(Error{ErrorCode::UnsupportedFormat, "Can't load '" + path + "': '" + extension
                                      + "' models aren't supported. Use .gltf, .glb or .obj."});

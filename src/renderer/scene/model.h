@@ -32,6 +32,17 @@ namespace NRE {
         std::vector<Vertex> vertices;
         std::vector<uint32_t> indices;
         uint32_t material = UINT32_MAX;
+        // The vertices' axis-aligned bounds in model space, set once at load (computeBounds). Used by picking.
+        glm::vec3 boundsMin{0.0f};
+        glm::vec3 boundsMax{0.0f};
+        void computeBounds() {
+            if (vertices.empty()) { boundsMin = boundsMax = glm::vec3(0.0f); return; }
+            boundsMin = boundsMax = vertices[0].position;
+            for (const Vertex& v : vertices) {
+                boundsMin = glm::min(boundsMin, v.position);
+                boundsMax = glm::max(boundsMax, v.position);
+            }
+        }
         Buffer vertexBuffer;
         Buffer indexBuffer;
     };

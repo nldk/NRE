@@ -7,6 +7,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME lightingMath COMMAND lightingMathTest)
 
+add_executable(pickingTest pickingTest.cpp)
+target_link_libraries(pickingTest PRIVATE renderer_headers)
+target_include_directories(pickingTest PRIVATE ${CMAKE_SOURCE_DIR}/src/renderer)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(pickingTest PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
+endif()
+add_test(NAME picking COMMAND pickingTest)
+
 # GPU tests: render offscreen through the unsafe render target and read it back. A window opens while they run.
 if(NRE_UNSAFE_API)
     add_executable(nre_visual_test visual/visualTest.cpp visual/capture.cpp)
@@ -36,7 +44,9 @@ if(NRE_UNSAFE_API)
                      sky-noon sky-sunset sky-night sun-disk sky-follows-sun sky-elevations lit-low-sun
                      scene-switch skybox-landscape landscape-no-sun
                      ambient-sky-blue ambient-sunset-warm ambient-small-default destroy-ibl-source
-                     skybox-landscape-lighting ambient-follows-sun sky-sunset-smooth)
+                     skybox-landscape-lighting ambient-follows-sun sky-sunset-smooth
+                     pick-hit pick-miss pick-nearest pick-hidden-and-destroyed pick-render-target pick-window
+                     projection-matches)
         add_test(NAME ${scenario} COMMAND nre_visual_test ${scenario})
         set_tests_properties(${scenario} PROPERTIES
             # vk-bootstrap's debug messenger prints "[<severity>: <types>]", e.g. "[ERROR: Validation]" or

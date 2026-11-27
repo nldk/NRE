@@ -14,6 +14,7 @@
 #include "gpu/texture.h"
 #include "gpu/cubemap.h"
 #include "lighting/lightingMath.h"
+#include "scene/picking.h"
 #include "core/frameRecorder.h"
 
 namespace NRE {
@@ -1168,6 +1169,43 @@ namespace NRE {
 
     Result<glm::mat4> getViewMatrix() {
         return getCamera().transform([](Camera* cam) { return cam->viewMatrix(); });
+    }
+
+    Result<glm::mat4> getProjectionMatrix() {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        return c->vulkan.projection;
+    }
+
+    Result<std::optional<RayHit>> pickInstance(glm::vec2 windowPos) {
+        auto scene = getBoundScenePtr();
+        if (!scene) return std::unexpected(scene.error());
+        auto c = context();
+#ifndef NDEBUG
+        if (c->config.mode != RenderMode::Render_3D) {
+            auto error = Error{ErrorCode::InvalidArgument, "pickInstance(): picking is only supported in Render_3D, "
+                               "the 2D scene's orthographic projection isn't handled."};
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);
+        }
+#endif
+        VkExtent2D extent = sceneExtent(c);
+        if (extent.width == 0 || extent.height == 0) return std::optional<RayHit>{};
+        glm::vec2 pixel = windowPos;
+        bool hasTarget = false;
+#ifdef NRE_UNSAFE_API
+        hasTarget = c->unsafeContext.targetColor.getImage() != VK_NULL_HANDLE;
+#endif
+        if (!hasTarget) {
+            // Window coordinates to framebuffer pixels (they differ on HiDPI screens).
+            int windowWidth = 0, windowHeight = 0;
+            glfwGetWindowSize(c->window.window, &windowWidth, &windowHeight);
+            if (windowWidth <= 0 || windowHeight <= 0) return std::optional<RayHit>{};
+            pixel *= glm::vec2(float(extent.width) / float(windowWidth), float(extent.height) / float(windowHeight));
+        }
+        Picking::Ray ray = Picking::rayFromPixel(pixel, glm::vec2(float(extent.width), float(extent.height)),
+                                                 c->vulkan.projection, (*scene)->camera.viewMatrix());
+        return Picking::pickScene(**scene, ray);
     }
 
     Result<float> getFPS() {

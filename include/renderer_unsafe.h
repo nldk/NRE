@@ -37,6 +37,7 @@ namespace NRE::Unsafe {
     // projection uses that size. The window is then cleared and only shows what the frame callback draws,
     // e.g. the texture in an ImGui panel. When the callback runs, the texture is in
     // VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
+    // With a render target set, pickInstance() takes render-target pixels (top-left origin), not window coordinates.
     // Calling it with the current size does nothing, so it can be called every frame with a panel's size.
     // A new size replaces the image (after waiting for the GPU): get the new view and re-register it with ImGui.
     RENDERER_API Result<void> setRenderTarget(uint32_t width, uint32_t height);

@@ -1,6 +1,7 @@
 #ifndef VULKANRENDERER_RENDERER_H
 #define VULKANRENDERER_RENDERER_H
 #include <expected>
+#include <optional>
 #include <ostream>
 #include <renderer_export.h>
 #include <string>
@@ -188,6 +189,15 @@ namespace NRE {
         }
     };
 
+    struct Instance;
+    // Where pickInstance() hit: the instance, the distance from the camera along the ray (world units) and the
+    // world-space point.
+    struct RayHit {
+        Handel<Instance> instance;
+        float distance;
+        glm::vec3 point;
+    };
+
     struct Shader;
     class Pipeline;
     struct Model;
@@ -362,6 +372,20 @@ namespace NRE {
     RENDERER_API Result<void> cameraLookAt(glm::vec3 target);
     RENDERER_API Result<glm::vec3> getCameraForward();
     RENDERER_API Result<glm::mat4> getViewMatrix();
+    // The projection the scene is drawn with (Render_3D), recomputed when the window or the unsafe render target is
+    // resized. It's a Vulkan one, not an OpenGL one: clip space has +Y down (the Y flip is in the matrix), and depth is
+    // reverse-Z with an infinite far plane (1 at the near plane, 0 at infinity). Code written for OpenGL conventions
+    // (e.g. ImGuizmo) has to flip Y back (proj[1][1] *= -1) and must not rely on a far plane. In Render_2D it's the
+    // orthographic projection the 2D scene uses. Errors only when the renderer isn't initialised.
+    RENDERER_API Result<glm::mat4> getProjectionMatrix();
+    // The nearest visible instance under a pixel, or std::nullopt: casts a ray from the bound scene's camera through
+    // the pixel and tests it against the scene's visible instances whose model is alive (back faces count too).
+    // windowPos is in the units of getMousePosition() (window coordinates, top-left origin). With an unsafe render
+    // target set it is in render-target pixels instead (top-left origin): map the panel the target is shown in to
+    // the target's size yourself. distance is along the ray from the camera, in world units; point is in world space.
+    // Render_3D only: in Render_2D it's a Debug-build error (InvalidArgument). In FunctionDrawMode the scene usually
+    // holds no instances, so nothing is hit. Errors when no scene is bound (NoSceneBound).
+    RENDERER_API Result<std::optional<RayHit>> pickInstance(glm::vec2 windowPos);
 
     // Frames per second, averaged over the last half second.
     RENDERER_API Result<float> getFPS();

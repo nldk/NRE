@@ -85,6 +85,8 @@ NRE_FUNCTION(Result<void>, rotateCamera, (float yawDelta, float pitchDelta), (ya
 NRE_FUNCTION(Result<void>, cameraLookAt, (glm::vec3 target), (target))
 NRE_FUNCTION(Result<glm::vec3>, getCameraForward, (), ())
 NRE_FUNCTION(Result<glm::mat4>, getViewMatrix, (), ())
+NRE_FUNCTION(Result<glm::mat4>, getProjectionMatrix, (), ())
+NRE_FUNCTION(Result<std::optional<RayHit>>, pickInstance, (glm::vec2 windowPos), (windowPos))
 
 NRE_FUNCTION(Result<float>, getFPS, (), ())
 NRE_FUNCTION(Result<float>, getDeltaTime, (), ())

@@ -1261,6 +1261,164 @@ NRE_SCENARIO(perf_landscape_sunset) {
     return measureLandscapeFrames([](int frame) { return sunAt(1.0f, 0.02f * float(frame)); });
 }
 
+// ---- Picking and the projection ----
+
+namespace {
+    // Where a world point lands in a width x height scene, in pixels (top-left origin), through the public matrices.
+    glm::vec2 projectToPixel(glm::vec3 world, float width, float height) {
+        glm::vec4 clip = TRY(getProjectionMatrix()) * TRY(getViewMatrix()) * glm::vec4(world, 1.0f);
+        glm::vec2 ndc = glm::vec2(clip) / clip.w;
+        return {(ndc.x * 0.5f + 0.5f) * width, (ndc.y * 0.5f + 0.5f) * height};
+    }
+
+    Handel<Instance> addBox(Handel<Model> model, glm::vec3 position) {
+        auto box = TRY(createInstance(model));
+        TRY(addInstanceToScene(box));
+        TRY(translateInstance(box, position));
+        return box;
+    }
+
+    bool nearF(float a, float b, float relative) { return std::fabs(a - b) <= relative * std::max(1.0f, std::fabs(b)); }
+}
+
+// Two boxes side by side, 4 m ahead: picking at each one's projected centre finds it, on its front face.
+NRE_SCENARIO(pick_hit) {
+    Session session(ApiMode::SceneMode);
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    glm::vec3 positions[2] = {{-1.5f, 0.3f, -4.0f}, {1.5f, -0.4f, -4.0f}};
+    Handel<Instance> boxes[2] = {addBox(model, positions[0]), addBox(model, positions[1])};
+    for (int i = 0; i < 2; ++i) {
+        auto hit = TRY(pickInstance(projectToPixel(positions[i], kWidth, kHeight)));
+        CHECK(hit.has_value());
+        CHECK(hit->instance == boxes[i]);
+        CHECK(std::fabs(hit->point.z - (positions[i].z + 0.5f)) < 1e-3f);
+        CHECK(std::fabs(hit->point.x - positions[i].x) <= 0.5f + 1e-3f);
+        CHECK(nearF(hit->distance, glm::length(hit->point), 1e-3f));
+    }
+    // Straight ahead of the camera the distance is exactly the camera-to-face distance.
+    TRY(translateInstance(boxes[0], glm::vec3(1.5f, -0.3f, 0.0f)));   // box 0 now at (0, 0, -4)
+    auto centre = TRY(pickInstance(glm::vec2(kWidth / 2.0f, kHeight / 2.0f)));
+    CHECK(centre.has_value() && centre->instance == boxes[0]);
+    CHECK(nearF(centre->distance, 3.5f, 1e-3f));
+    CHECK(glm::length(centre->point - glm::vec3(0.0f, 0.0f, -3.5f)) < 1e-3f);
+    return true;
+}
+
+NRE_SCENARIO(pick_miss) {
+    Session session(ApiMode::SceneMode);
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    addBox(model, glm::vec3(0.0f, 0.0f, -4.0f));
+    auto sky = TRY(pickInstance(glm::vec2(10.0f, 10.0f)));
+    CHECK(!sky.has_value());
+    auto centre = TRY(pickInstance(glm::vec2(kWidth / 2.0f, kHeight / 2.0f)));
+    CHECK(centre.has_value());
+    return true;
+}
+
+// Two boxes in line: the nearer one hides the farther one.
+NRE_SCENARIO(pick_nearest) {
+    Session session(ApiMode::SceneMode);
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    addBox(model, glm::vec3(0.0f, 0.0f, -8.0f));   // created first, so the order doesn't decide
+    auto near = addBox(model, glm::vec3(0.0f, 0.0f, -4.0f));
+    auto hit = TRY(pickInstance(glm::vec2(kWidth / 2.0f, kHeight / 2.0f)));
+    CHECK(hit.has_value() && hit->instance == near);
+    CHECK(nearF(hit->distance, 3.5f, 1e-3f));
+    return true;
+}
+
+NRE_SCENARIO(pick_hidden_and_destroyed) {
+    Session session(ApiMode::SceneMode);
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto otherModel = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    auto far = addBox(model, glm::vec3(0.0f, 0.0f, -12.0f));
+    auto middle = addBox(otherModel, glm::vec3(0.0f, 0.0f, -8.0f));
+    auto near = addBox(model, glm::vec3(0.0f, 0.0f, -4.0f));
+    glm::vec2 centre(kWidth / 2.0f, kHeight / 2.0f);
+    auto first = TRY(pickInstance(centre));
+    CHECK(first.has_value() && first->instance == near);
+    TRY(setVisibility(near, false));
+    auto hit = TRY(pickInstance(centre));
+    CHECK(hit.has_value() && hit->instance == middle);
+    TRY(destroyModel(otherModel));   // its instance stays valid but draws nothing, so it can't be picked either
+    hit = TRY(pickInstance(centre));
+    CHECK(hit.has_value() && hit->instance == far);
+    TRY(setVisibility(far, false));
+    CHECK(!TRY(pickInstance(centre)).has_value());
+    return true;
+}
+
+// A 320x240 target (the window is 640x480, so the aspect differs): pixels are the target's.
+NRE_SCENARIO(pick_render_target) {
+    Session session(ApiMode::SceneMode);
+    TRY(Unsafe::setRenderTarget(320, 240));
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    glm::vec3 position(-1.0f, 0.4f, -4.0f);
+    auto box = addBox(model, position);
+    auto hit = TRY(pickInstance(projectToPixel(position, 320.0f, 240.0f)));
+    CHECK(hit.has_value() && hit->instance == box);
+    CHECK(!TRY(pickInstance(glm::vec2(300.0f, 220.0f))).has_value());
+    return true;
+}
+
+// No render target: window coordinates, like getMousePosition().
+NRE_SCENARIO(pick_window) {
+    Session session(ApiMode::SceneMode);
+    TRY(Unsafe::clearRenderTarget());
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    glm::vec3 position(1.0f, 0.4f, -4.0f);
+    auto box = addBox(model, position);
+    auto hit = TRY(pickInstance(projectToPixel(position, float(kWidth), float(kHeight))));
+    CHECK(hit.has_value() && hit->instance == box);
+    CHECK(!TRY(pickInstance(glm::vec2(10.0f, 10.0f))).has_value());
+    return true;
+}
+
+// The public projection matches the picture: the box's eight corners, projected, bound the pixels it covers.
+NRE_SCENARIO(projection_matches) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpSun();
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    glm::vec3 centre(0.8f, 0.5f, -4.0f);
+    addBox(model, centre);
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (int corner = 0; corner < 8; ++corner) {
+        glm::vec3 offset((corner & 1) ? 0.5f : -0.5f, (corner & 2) ? 0.5f : -0.5f, (corner & 4) ? 0.5f : -0.5f);
+        glm::vec2 p = projectToPixel(centre + offset, float(kWidth), float(kHeight));
+        lo = glm::min(lo, p);
+        hi = glm::max(hi, p);
+    }
+    glm::vec3 sky{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    glm::ivec2 seenLo(1 << 20), seenHi(-1);
+    for (uint32_t y = 0; y < image.height; ++y)
+        for (uint32_t x = 0; x < image.width; ++x)
+            if (!near(image.at(x, y), sky, 10.0f / 255.0f)) {
+                seenLo = glm::min(seenLo, glm::ivec2(x, y));
+                seenHi = glm::max(seenHi, glm::ivec2(x, y));
+            }
+    CHECK(seenHi.x >= 0);
+    CHECK(std::fabs(float(seenLo.x) - lo.x) <= 2.0f && std::fabs(float(seenLo.y) - lo.y) <= 2.0f);
+    CHECK(std::fabs(float(seenHi.x + 1) - hi.x) <= 2.0f && std::fabs(float(seenHi.y + 1) - hi.y) <= 2.0f);
+    return true;
+}
+
 int main(int argc, char** argv) {
     return runScenarios(argc, argv);
 }
