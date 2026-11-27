@@ -16,3 +16,6 @@ set_target_properties(VulkanRenderer PROPERTIES
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(VulkanRenderer PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
 endif()
+
+# The landscape demo (example/landscape).
+add_subdirectory(landscape)

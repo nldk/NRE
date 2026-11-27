@@ -17,14 +17,16 @@ add_test(NAME picking COMMAND pickingTest)
 
 # GPU tests: render offscreen through the unsafe render target and read it back. A window opens while they run.
 if(NRE_UNSAFE_API)
-    add_executable(nre_visual_test visual/visualTest.cpp visual/capture.cpp)
+    # world.cpp: the landscape demo's world, rendered by the landscape-demo scenario so the demo can't silently break.
+    add_executable(nre_visual_test visual/visualTest.cpp visual/capture.cpp ${PROJECT_SOURCE_DIR}/example/landscape/world.cpp)
     target_link_libraries(nre_visual_test PRIVATE NRE::renderer Vulkan::Vulkan stb_image)
-    target_include_directories(nre_visual_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/visual)
+    target_include_directories(nre_visual_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/visual ${PROJECT_SOURCE_DIR}/example/landscape)
     nre_compile_shaders(nre_visual_test ${PROJECT_SOURCE_DIR}/example/shaders ${CMAKE_CURRENT_SOURCE_DIR}/visual/shaders)
     target_compile_definitions(nre_visual_test PRIVATE
         ASSET_DIR="${PROJECT_SOURCE_DIR}/example/assets"
         TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
         GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/visual/golden"
+        LANDSCAPE_DIR="${PROJECT_SOURCE_DIR}/example/landscape"
     )
     set_target_properties(nre_visual_test PROPERTIES
         BUILD_RPATH   "$ORIGIN"
@@ -46,7 +48,7 @@ if(NRE_UNSAFE_API)
                      scene-switch skybox-landscape landscape-no-sun
                      ambient-sky-blue ambient-sunset-warm ambient-small-default destroy-ibl-source
                      skybox-landscape-lighting ambient-follows-sun sky-sunset-smooth
-                     pick-hit pick-miss pick-nearest pick-hidden-and-destroyed pick-render-target pick-scaled pick-window mesh-model
+                     pick-hit pick-miss pick-nearest pick-hidden-and-destroyed pick-render-target pick-scaled pick-window mesh-model landscape-demo
                      projection-matches haze-far haze-off haze-height haze-horizon-seam haze-golden-hour
                      haze-sun-lobe)
         add_test(NAME ${scenario} COMMAND nre_visual_test ${scenario})

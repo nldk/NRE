@@ -1,6 +1,7 @@
 // Offscreen visual tests: each scenario renders one frame into the render target and checks the pixels.
 // Run through ctest (one test per scenario) or directly: nre_visual_test <scenario> [--update-golden].
 #include "capture.h"
+#include "world.h"
 
 #include <algorithm>
 #include <array>
@@ -1563,6 +1564,58 @@ NRE_SCENARIO(mesh_model) {
     const std::vector<uint32_t> partial = {0, 1};
     CHECK(!createMeshModel(quad(glm::vec3(0.0f)), partial));
 #endif
+    return true;
+}
+
+// The landscape demo's world (example/landscape) at noon, golden hour and dusk, from the demo's start view.
+// Saves landscape-<time>.png to NRE_TEST_OUT. Checks only that it renders sensibly: sky above, lit ground below,
+// golden hour warmer than noon, dusk darker; the pictures are for looking at.
+NRE_SCENARIO(landscape_demo) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    auto palette = TRY(createMaterial(TRY(createTexture(LANDSCAPE_DIR "/palette.png"))));
+    auto add = [&](const Landscape::MeshData& mesh, std::span<const Landscape::Placement> where) {
+        auto model = TRY(createMeshModel(mesh.vertices, mesh.indices, palette));
+        for (const Landscape::Placement& p : where) {
+            auto instance = TRY(createInstance(model));
+            TRY(setInstanceTransform(instance, {p.position, glm::angleAxis(p.yaw, glm::vec3(0, 1, 0)), glm::vec3(p.scale)}));
+            TRY(addInstanceToScene(instance));
+        }
+    };
+    const Landscape::Placement origin{glm::vec3(0.0f), 0.0f, 1.0f};
+    add(Landscape::makeTerrain(513), {&origin, 1});
+    add(Landscape::makeWater(), {&origin, 1});
+    add(Landscape::makeTree(), Landscape::placeTrees(5000, 7));
+    add(Landscape::makeRock(1), Landscape::placeRocks(240, 11));
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    glm::vec3 eye(-600.0f, 0.0f, 1400.0f);
+    eye.y = std::max(Landscape::terrainHeight(eye.x, eye.z), Landscape::waterLevel) + 12.0f;
+    TRY(setCameraPosition(eye));
+    TRY(setCameraRotation(0.8f, 0.05f));
+    auto at = [&](float elevationDeg, const char* name) {
+        float e = glm::radians(elevationDeg);
+        TRY(setSun(-glm::normalize(glm::vec3(-0.8f * std::cos(e), std::sin(e), -0.6f * std::cos(e)))));
+        Image image = renderAndCapture();
+        image = renderAndCapture();      // both frame slots on the new sun
+        saveCapture(image, std::string("landscape-") + name + ".png");
+        return image;
+    };
+    Image noon = at(55.0f, "noon"), golden = at(8.0f, "golden-hour"), dusk = at(-3.0f, "dusk");
+    // And up in the mountains (north), for the rock and snow colours.
+    glm::vec3 high(200.0f, 0.0f, -300.0f);
+    high.y = Landscape::terrainHeight(high.x, high.z) + 60.0f;
+    TRY(setCameraPosition(high));
+    TRY(setCameraRotation(0.2f, 0.12f));
+    (void)at(35.0f, "mountains");
+    auto band = [](const Image& im, float y0, float y1) {
+        return im.average(0, uint32_t(y0 * im.height), im.width, uint32_t(y1 * im.height));
+    };
+    glm::vec3 noonSky = band(noon, 0.0f, 0.15f), noonGround = band(noon, 0.8f, 1.0f);
+    CHECK(noonSky.b > noonSky.r && luminance(noonSky) > 0.2f);
+    CHECK(luminance(noonGround) > 0.05f);
+    glm::vec3 goldenGround = band(golden, 0.8f, 1.0f);
+    CHECK(goldenGround.r / std::max(goldenGround.b, 1e-3f) > noonGround.r / std::max(noonGround.b, 1e-3f));
+    CHECK(luminance(band(dusk, 0.0f, 1.0f)) < luminance(band(noon, 0.0f, 1.0f)));
     return true;
 }
 
