@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nre"
+version = "0.3.0"
+description = "Python bindings (ctypes) for NRE, a Vulkan renderer, over its C API libnre_c 0.3"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Typing :: Typed",
+]
+
+[tool.setuptools]
+packages = ["nre"]
+
+[tool.setuptools.package-data]
+nre = ["py.typed"]

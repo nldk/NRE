@@ -1,0 +1,11 @@
+[package]
+name = "nre-sys"
+description = "Raw FFI declarations for libnre_c, the C API of the NRE renderer (nre.h)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+links = "nre_c"
+build = "build.rs"
+
+[lib]
+doctest = false

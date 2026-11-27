@@ -1,0 +1,4 @@
+# Pure Lua, nothing is built. Core dumps from the abort test (if core files land in the CWD), editor/profiler leftovers:
+core
+core.*
+luacov.*

@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Nre.Examples.Orbit/Nre.Examples.Orbit.csproj" />
+  <Project Path="Nre.Tests/Nre.Tests.csproj" />
+  <Project Path="Nre/Nre.csproj" />
+</Solution>
