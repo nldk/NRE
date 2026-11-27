@@ -12,19 +12,23 @@
 namespace Landscape {
     constexpr float worldSize = 4096.0f;    // metres, centred on the origin
     constexpr float waterLevel = 0.0f;
+    constexpr int terrainResolution = 513;  // vertices per side of the terrain mesh (8 m apart)
 
     struct MeshData {
         std::vector<NRE::Vertex> vertices;
         std::vector<uint32_t> indices;
     };
 
-    // Ground height in metres at (x, z). Deterministic, so the camera and the placement use the same terrain.
+    // Ground height in metres at (x, z) from the noise. The drawn terrain samples it every 8 m, so between samples
+    // the two differ; use groundHeight() for anything that has to sit on (or stay above) the visible ground.
     float terrainHeight(float x, float z);
+    // The height of the drawn terrain at (x, z): the same grid and triangle split as makeTerrain().
+    float groundHeight(float x, float z);
     // Slope at (x, z): 0 flat, 1 vertical.
     float terrainSlope(float x, float z);
 
-    // resolution × resolution vertices over the whole world.
-    MeshData makeTerrain(int resolution);
+    // terrainResolution × terrainResolution vertices over the whole world.
+    MeshData makeTerrain();
     MeshData makeTree();                    // a conifer about 10 m tall, base at the origin
     MeshData makeRock(uint32_t seed);       // a lumpy boulder about 2 m across, base at the origin
     MeshData makeWater();                   // one quad at waterLevel covering the world

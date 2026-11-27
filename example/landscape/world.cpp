@@ -11,7 +11,8 @@ namespace Landscape {
     namespace {
         // Palette layout (keep in sync with makePalette.py).
         constexpr float paletteMinHeight = -30.0f, paletteMaxHeight = 700.0f;
-        constexpr float terrainRows = 191.0f / 256.0f;     // v range used by the terrain colours
+        constexpr float terrainRows = 192.0f;              // palette rows used by the terrain colours
+        constexpr float paletteHeight = 256.0f;
         glm::vec2 swatch(int column, int row) { return {(column + 0.5f) / 4.0f, (row + 16) / 256.0f}; }
         const glm::vec2 darkFoliage = swatch(0, 192), lightFoliage = swatch(1, 192), bark = swatch(2, 192);
         const glm::vec2 rockGrey = swatch(3, 192), water = swatch(0, 224);
@@ -90,7 +91,7 @@ namespace Landscape {
             std::vector<Placement> out;
             for (int tries = 0; int(out.size()) < count && tries < count * 50; ++tries) {
                 float x = coord(rng), z = coord(rng);
-                float h = terrainHeight(x, z);
+                float h = groundHeight(x, z);
                 if (!fits(x, z, h, terrainSlope(x, z), unit(rng))) continue;
                 out.push_back({glm::vec3(x, h - 0.3f, z), unit(rng) * 2.0f * std::numbers::pi_v<float>,
                                0.7f + 0.6f * unit(rng)});
@@ -114,11 +115,26 @@ namespace Landscape {
         return h;
     }
 
+    float groundHeight(float x, float z) {
+        constexpr float step = worldSize / float(terrainResolution - 1);
+        float gx = std::clamp((x + worldSize * 0.5f) / step, 0.0f, float(terrainResolution - 1) - 1e-3f);
+        float gz = std::clamp((z + worldSize * 0.5f) / step, 0.0f, float(terrainResolution - 1) - 1e-3f);
+        float i = std::floor(gx), j = std::floor(gz), fx = gx - i, fz = gz - j;
+        auto at = [](float i, float j) {
+            return terrainHeight(-worldSize * 0.5f + i * step, -worldSize * 0.5f + j * step);
+        };
+        float a = at(i, j), b = at(i + 1, j), c = at(i, j + 1), d = at(i + 1, j + 1);
+        // makeTerrain splits each cell along the b–c diagonal: triangles (a, c, b) and (b, c, d).
+        if (fx + fz <= 1.0f) return a + fx * (b - a) + fz * (c - a);
+        return d + (1.0f - fx) * (c - d) + (1.0f - fz) * (b - d);
+    }
+
     float terrainSlope(float x, float z) {
         return 1.0f - terrainNormal(x, z).y;
     }
 
-    MeshData makeTerrain(int resolution) {
+    MeshData makeTerrain() {
+        constexpr int resolution = terrainResolution;
         MeshData m;
         m.vertices.reserve(size_t(resolution) * resolution);
         const float step = worldSize / float(resolution - 1);
@@ -128,8 +144,10 @@ namespace Landscape {
                 float h = terrainHeight(x, z);
                 glm::vec3 normal = terrainNormal(x, z);
                 float u = std::clamp((h - paletteMinHeight) / (paletteMaxHeight - paletteMinHeight), 0.002f, 0.998f);
-                float v = std::clamp(1.0f - normal.y, 0.0f, 1.0f) * 2.0f;     // slopes beyond 60° all read as cliff
-                m.vertices.push_back({glm::vec3(x, h, z), normal, glm::vec2(u, std::min(v, 1.0f) * terrainRows)});
+                float steep = std::min(std::clamp(1.0f - normal.y, 0.0f, 1.0f) * 2.0f, 1.0f);   // ≥ 60°: cliff
+                // Texel centres of rows 0..191 only: v = 0 would blend in row 255 (the sampler repeats).
+                float v = (0.5f + steep * (terrainRows - 1.0f)) / paletteHeight;
+                m.vertices.push_back({glm::vec3(x, h, z), normal, glm::vec2(u, v)});
             }
         }
         m.indices.reserve(size_t(resolution - 1) * (resolution - 1) * 6);
@@ -179,7 +197,8 @@ namespace Landscape {
             glm::vec3 q = p * r * glm::vec3(1.1f, 0.7f, 0.9f);
             m.vertices.push_back({q + glm::vec3(0.0f, 0.4f, 0.0f), glm::vec3(0.0f), rockGrey});
         }
-        // Midpoints are duplicated per face, so the normals come out faceted, which suits a rock.
+        // Edge midpoints are duplicated where parent faces meet, so the computed normals give smooth patches with
+        // creases between them: lumpy enough for a rock.
         for (glm::uvec3 f : faces) m.indices.insert(m.indices.end(), {f.x, f.y, f.z});
         return m;
     }
