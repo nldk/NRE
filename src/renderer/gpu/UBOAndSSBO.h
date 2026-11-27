@@ -25,7 +25,8 @@ namespace NRE {
         glm::vec4 shadowParams;   // x: cascade count (0 = no sun shadows), y: normal offset in shadow-map texels (of the cascade used), zw: 0
         glm::vec4 sunRadiance;    // rgb: light reaching objects (sun colour x intensity x atmosphere tint), w: 1 if the sun is up
         glm::vec4 skyColor;       // rgb: the sky colour expanded with inverseToneMapACES (linear), w: 0
-        glm::vec4 skyParams;      // x: sky source (0 colour, 1 cubemap, 2 procedural), y: specular mip count,
+        glm::vec4 skyParams;      // x: sky source (0 colour, 1 cubemap, 2 procedural), y: the IBL's specular mip count
+                                  // (set 0 binding 5; 0: no IBL this frame, the ambient is the sky colour's hemisphere),
                                   // z: the procedural sky's scattering brightness = sun intensity / 3 (the sunlit part
                                   // scales with it, the night floor doesn't; the cubemap already has both applied),
                                   // else 0. w: 0

@@ -106,4 +106,16 @@ namespace NRE {
                        VK_IMAGE_ASPECT_COLOR_BIT, 6);
         });
     }
+
+    Result<void> Cubemap::filterIbl() {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        if (ibl || image.getImage() == VK_NULL_HANDLE || !c->vulkan.iblFilter.ready()) return {};
+        auto filtered = std::make_unique<Ibl>();
+        if (auto r = filtered->create(); !r) return r;
+        if (!filtered->ready()) return {};   // RenderErrorPolicy::Ignore: reported; the scene lights with its sky colour
+        if (auto r = filtered->filterLdr(image.getView(), getSize()); !r) return r;
+        ibl = std::move(filtered);
+        return {};
+    }
 }

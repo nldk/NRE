@@ -79,7 +79,7 @@ At exposure 5 the night floor becomes sRGB (16, 29, 59) after ACES (an earlier v
 - Same constants and units (copy `Atmosphere::` values into `transmittanceLut.comp` / the sky shader), same quadratic
   midpoint optical-depth integration, same ozone tent profile, phase functions and `skyScale`.
 - `FrameData.skyParams.z` = the procedural sky's scattering brightness, `intensity / 3` (ruling R37). The sky cubemap (and so the IBL source) already holds the finished radiance: the sunlit part times it, plus the night floor, which does not scale.
-- Tone-map exposure in Landscape = `setExposure * autoExposure(elevation)`; sun below the horizon gives no sun light and no sun shadows.
+- Tone-map exposure in Landscape = `setExposure * autoExposure(elevation)` with the procedural sky (with a skybox it is `setExposure` alone, ruling R38); sun below the horizon gives no sun light and no sun shadows.
 - Sun disk and sun light use the radiance above; the horizon rows near the sun can reach ~4 in linear radiance at 2 degrees (ACES clamps them).
 - No stars or moon. The prototype ground is not a requirement; ground comes from the scene.
 - The twilight glow at -4 degrees comes only from single scattering by sunlit upper layers; the GPU version should look the same without extra terms.

@@ -5,6 +5,7 @@
 #include "core/frames.h"
 #include "gpu/cubemap.h"
 #include "gpu/image.h"
+#include "lighting/ibl.h"
 #include "pipeline/computePipeline.h"
 #include "renderer.h"
 
@@ -23,13 +24,15 @@ namespace NRE {
     // still on the GPU uses. The scene's set 0 binding 2 of slot f points at cubemapView(f). The sky is regenerated
     // when the brightness changed or the sun moved more than regenerateAngle from the sun of the last regeneration
     // (with brightness 0 the sun's direction doesn't matter); each slot then catches up once to that same sky, so all
-    // slots show the same sky and consecutive frames never alternate between two.
+    // slots show the same sky and consecutive frames never alternate between two. Each slot's IBL (its light on
+    // objects) is refiltered from that slot's cubemap right after it's regenerated, so it always matches it.
     //
     // Frame flow (recordFrame): update() before the shadow and main passes, in the same command buffer, when the
     // bound scene shows the procedural sky; draw() in the main pass after the geometry.
     class Sky {
         Image transmittance;                          // the LUT: storage + sampled
         Cubemap cubemaps[max_frames_in_flight];       // one per frame slot
+        Ibl ibls[max_frames_in_flight];               // each filtered from the slot's cubemap, right after it
         ComputePipeline lutPass, cubemapPass;
         VkDescriptorSet cubemapSets[max_frames_in_flight]{};
         VkSampler lutSampler = VK_NULL_HANDLE;        // linear, clamped to the edge
@@ -46,22 +49,23 @@ namespace NRE {
         static constexpr uint32_t lutWidth = 256, lutHeight = 64;
         static constexpr uint32_t cubemapSize = 256;
         static constexpr float regenerateAngle = 0.25f * 3.14159265f / 180.0f;   // radians
-        // The LUT (computed here, waiting for it), the cubemaps (all mips in SHADER_READ_ONLY_OPTIMAL, contents
-        // undefined until update()), the compute pipelines and the draw pipeline. Needs the descriptor pool and the
-        // shared sampler.
+        // The LUT (computed here, waiting for it), the cubemaps and IBLs (all mips in SHADER_READ_ONLY_OPTIMAL,
+        // contents undefined until update()), the compute pipelines and the draw pipeline. Needs the descriptor pool,
+        // the shared sampler and the IblFilter.
         Result<void> create();
         // Recomputes this frame slot's cubemap if it's behind the sun (see above): the compute pass, then the mips
-        // (blits), then a barrier so the fragment and compute shaders after it read the result. Outside any render
-        // pass. sunDirection: the way the sunlight travels; brightness: the scattering brightness, sun intensity / 3
-        // (0: night floor only). True when it recomputed the cubemap (e.g. for the IBL to refilter from it in the
-        // same command buffer, after this).
+        // (blits), then this slot's IBL from it, with barriers so the fragment shaders after it read both. Outside any
+        // render pass. sunDirection: the way the sunlight travels; brightness: the scattering brightness, sun
+        // intensity / 3 (0: night floor only). True when it recomputed them.
         bool update(VkCommandBuffer commandBuffer, glm::vec3 sunDirection, float brightness);
         // The sky behind what the main pass drew so far, for the scene's sky source this frame (writeFrameData):
         // cubemap or procedural; nothing for the plain colour (the clear colour is the sky then). Binds its pipeline
         // and the scene's set 0. Inside the main pass, Render_3D only.
         void draw(VkCommandBuffer commandBuffer, Scene& scene);
-        // This frame slot's sky cubemap (what set 0 binding 2 shows in procedural mode), for the IBL filter.
+        // This frame slot's sky cubemap (what set 0 binding 2 shows in procedural mode).
         VkImageView cubemapView() const;
+        // A frame slot's IBL (what set 0 bindings 4 and 5 show in procedural mode).
+        const Ibl& ibl(uint32_t frameSlot) const { return ibls[frameSlot]; }
         VkImageView cubemapView(uint32_t frameSlot) const { return cubemaps[frameSlot].getView(); }
         VkImage cubemapImage(uint32_t frameSlot) const { return cubemaps[frameSlot].getImage(); }
         uint32_t cubemapMipLevels() const { return cubemaps[0].getMipLevels(); }

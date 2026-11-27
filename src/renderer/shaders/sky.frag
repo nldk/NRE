@@ -6,20 +6,11 @@
 //                  plus the sun's disk. Goes through the exposure like the lit scene does.
 #include "nre/frame.glsl"
 #include "atmosphere.glsl"
+#include "toneCurve.glsl"
 
 layout(location = 0) in vec3 direction;
 layout(location = 1) flat in vec4 params;   // x: 1 / exposure, y: the angle one pixel covers (radians)
 layout(location = 0) out vec4 outColor;
-
-// Inverse of Narkowicz's ACES fit. Must match inverseToneMapACES in lighting/lightingMath.h.
-vec3 inverseToneMapACES(vec3 y) {
-    y = clamp(y, 0.0, 0.999);   // the fit only reaches 1 at infinity
-    vec3 a = 2.43 * y - 2.51;
-    vec3 b = 0.59 * y - 0.03;
-    vec3 c = 0.14 * y;
-    vec3 disc = max(b * b - 4.0 * a * c, 0.0);
-    return (-b - sqrt(disc)) / (2.0 * a);
-}
 
 void main() {
     if (nreFrame.skyParams.x == 1.0) {

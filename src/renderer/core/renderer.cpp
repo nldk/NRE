@@ -363,13 +363,17 @@ namespace NRE {
         if (!err) return err;
 
         // The order of descriptorLayouts is the set number: 0 = per frame (scene), 1 = material.
-        // Set 0: 0 = FrameData (camera, sun), 1 = lights, 2 = the skybox cubemap, 3 = the sun's shadow maps.
+        // Set 0: 0 = FrameData (camera, sun), 1 = lights, 2 = the sky cubemap, 3 = the sun's shadow maps, and the sky's
+        // light on objects: 4 = irradiance, 5 = prefiltered specular, 6 = the BRDF LUT.
         auto frameLayout = DescriptorSetLayout();
         VkDescriptorSetLayoutBinding frameBindings[] = {
             {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         };
         err = frameLayout.createLayout(frameBindings);
         if (!err) return err;
@@ -423,7 +427,11 @@ namespace NRE {
         // Before any scene: createScene() points every frame set's binding 3 at it.
         err = c->vulkan.shadowMaps.create();
         if (!err) return err;
-        // The sky pass, and the procedural sky's LUT (computed now) and cubemaps. Scenes point binding 2 at those.
+        // The IBL passes and the BRDF LUT (computed now). Before the sky (its per-slot IBLs) and any scene (binding 6).
+        err = c->vulkan.iblFilter.create();
+        if (!err) return err;
+        // The sky pass, and the procedural sky's LUT (computed now), cubemaps and IBLs. Scenes point bindings 2, 4 and
+        // 5 at those.
         err = c->vulkan.sky.create();
         if (!err) return err;
 
@@ -453,6 +461,7 @@ namespace NRE {
         c->vulkan.toneMap.destroy();
         c->vulkan.shadowMaps.destroy();
         c->vulkan.sky.destroy();
+        c->vulkan.iblFilter.destroy();
 #ifdef NRE_UNSAFE_API
         (void)c->unsafeContext.targetColor.destroyImage();
         (void)c->unsafeContext.targetDepth.destroyImage();
@@ -1113,7 +1122,10 @@ namespace NRE {
             ErrorHandeling::handleError(error);
             return std::unexpected(error);
         }
-        (*s)->skybox = cubemap;   // bindFrameData points each frame's set at it once that frame is free
+        (*s)->skybox = cubemap;   // writeFrameData points each frame's set at it once that frame is free
+        // Its light on objects, filtered once per cubemap (blocking, the first time). If that fails the sky still
+        // shows; the scene's ambient then comes from the sky colour.
+        if (Cubemap* sky = context()->manager.get(cubemap)) return sky->filterIbl();
         return {};
     }
 

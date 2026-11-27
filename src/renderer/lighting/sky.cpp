@@ -20,26 +20,6 @@ namespace NRE {
         // Matches the push constant block of sky.vert.
         struct DrawPush { glm::mat4 rayMatrix; glm::vec4 params; };
 
-        void imageBarrier(VkCommandBuffer cmd, VkImage image, uint32_t baseMip, uint32_t mipCount, uint32_t layers,
-                          VkImageLayout from, VkImageLayout to,
-                          VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                          VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask = srcStage;
-            b.srcAccessMask = srcAccess;
-            b.dstStageMask = dstStage;
-            b.dstAccessMask = dstAccess;
-            b.oldLayout = from;
-            b.newLayout = to;
-            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.image = image;
-            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, baseMip, mipCount, 0, layers};
-            VkDependencyInfo d{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            d.imageMemoryBarrierCount = 1;
-            d.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &d);
-        }
-
         // Angle between two unit vectors, precise for small angles (acos isn't).
         float angleBetween(glm::vec3 a, glm::vec3 b) {
             return 2.0f * std::asin(std::min(0.5f * glm::length(a - b), 1.0f));
@@ -106,6 +86,11 @@ namespace NRE {
             if (auto r = cubemap.createStorage(cubemapSize, skyFormat, 0); !r) return r;
             if (cubemap.getImage() == VK_NULL_HANDLE) return {};
         }
+        // The procedural sky's light on objects: one IBL per slot, next to that slot's cubemap.
+        for (Ibl& ibl : ibls) {
+            if (auto r = ibl.create(); !r) return r;
+            if (!ibl.ready()) return {};   // Ignore: reported (or there's no IblFilter); scenes use the sky colour
+        }
 
         auto lutSet = lutPass.allocateSet();
         if (!lutSet) return std::unexpected(lutSet.error());
@@ -153,39 +138,12 @@ namespace NRE {
         const uint32_t groups = (cubemapSize + groupSize - 1) / groupSize;
         cubemapPass.dispatch(cmd, cubemapSets[slot], &push, groups, groups, 6);
 
-        // The mips, each a linear 2x2 average of the one above, by blits. Mip 0 becomes the first source; the others
-        // are written whole.
-        imageBarrier(cmd, image, 0, 1, 6, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                     VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        if (mips > 1) {
-            imageBarrier(cmd, image, 1, mips - 1, 6, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        }
-        for (uint32_t level = 1; level < mips; ++level) {
-            const int32_t src = int32_t(std::max(cubemapSize >> (level - 1), 1u)), dst = int32_t(std::max(cubemapSize >> level, 1u));
-            VkImageBlit2 region{VK_STRUCTURE_TYPE_IMAGE_BLIT_2};
-            region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 6};
-            region.srcOffsets[1] = {src, src, 1};
-            region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 6};
-            region.dstOffsets[1] = {dst, dst, 1};
-            VkBlitImageInfo2 blit{VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
-            blit.srcImage = image;
-            blit.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            blit.dstImage = image;
-            blit.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            blit.regionCount = 1;
-            blit.pRegions = &region;
-            blit.filter = VK_FILTER_LINEAR;
-            vkCmdBlitImage2(cmd, &blit);
-            imageBarrier(cmd, image, level, 1, 6, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                         VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                         VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        }
-        // Readable by the main pass (sky.frag and the lighting's ambient) and by later compute passes (the IBL filter).
-        imageBarrier(cmd, image, 0, mips, 6, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        // The mips, each a linear 2x2 average of the one above, by blits; then readable by the main pass (sky.frag)
+        // and the IBL filter.
+        recordCubemapMips(cmd, image, cubemapSize, mips);
+        // This slot's IBL from the new sky, before the main pass reads either. Like the cubemap it's this slot's own,
+        // so no frame in flight reads it while it's rewritten.
+        ibls[slot].filter(cmd, cubemap.getView());
         return true;
     }
 
@@ -221,7 +179,7 @@ namespace NRE {
         auto c = context();
         return c && c->manager.get(drawPipeline) && lutPass.ready() && cubemapPass.ready() && lutSampler != VK_NULL_HANDLE
                && transmittance.getImage() != VK_NULL_HANDLE && cubemaps[max_frames_in_flight - 1].getImage() != VK_NULL_HANDLE
-               && cubemapSets[max_frames_in_flight - 1] != VK_NULL_HANDLE;
+               && cubemapSets[max_frames_in_flight - 1] != VK_NULL_HANDLE && ibls[max_frames_in_flight - 1].ready();
     }
 
     void Sky::destroy() {
@@ -231,6 +189,7 @@ namespace NRE {
         cubemapPass.destroy();
         (void)transmittance.destroyImage();
         for (Cubemap& cubemap : cubemaps) cubemap = Cubemap{};
+        for (Ibl& ibl : ibls) ibl.destroy();
         if (lutSampler) vkDestroySampler(c->vulkan.device, lutSampler, nullptr);
         lutSampler = VK_NULL_HANDLE;
         for (VkDescriptorSet& set : cubemapSets) set = VK_NULL_HANDLE;   // freed with the descriptor pool

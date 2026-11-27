@@ -66,7 +66,8 @@ namespace NRE {
         // distance, no haze, exposure is exactly setExposure.
         Small,
         // Procedural sky computed from the sun, sky-lit ambient and reflections, cascaded shadows reaching far, haze,
-        // and an automatic exposure that follows the sun's height (setExposure multiplies on top).
+        // and an automatic exposure that follows the sun's height (setExposure multiplies on top; not with a
+        // skybox, see setSkybox).
         Landscape,
     };
     enum class ErrorCode {
@@ -306,7 +307,9 @@ namespace NRE {
     //   Small:     shadows 20 m, haze off,                    sky = cubemap if set, else the sky colour
     //   Landscape: shadows 500 m, haze visibility 8000 m,     sky = procedural (or the cubemap if set)
     // The sun, lights, exposure and sky colour are kept. Landscape's sky comes from the sun: without one (setSun not
-    // called, or intensity 0) the scene shows night.
+    // called, or intensity 0) the scene shows night. Objects are lit by whichever sky shows (ambient and reflections,
+    // in both modes); Small's sky colour lights them as a plain sky/ground hemisphere. The automatic exposure only
+    // comes with the procedural sky: a Landscape scene with a skybox is exposed at setExposure alone, as in Small.
     RENDERER_API Result<void> setSceneLighting(SceneLighting lighting);
     RENDERER_API Result<SceneLighting> getSceneLighting();
     // How far from the camera the bound scene's sun casts shadows, in metres. 0 turns sun shadows off; must not be
@@ -320,9 +323,10 @@ namespace NRE {
     // Tone mapping. Shaders write linear light (values above 1 are fine, and must not tone map themselves);
     // at the end of the frame the renderer multiplies it by the exposure and maps it to the screen with the
     // ACES curve. Render_2D isn't tone mapped: what the shaders write is what's shown.
-    // The bound scene's exposure: 2 is twice as bright, 0.5 half. Must be greater than 0. Default 1. In Landscape it
-    // multiplies an automatic exposure that follows the sun's height (1 from 30 degrees up, rising smoothly to 5 at
-    // night), so noon, golden hour and dusk all read well; dusk still comes out darker and warmer than noon.
+    // The bound scene's exposure: 2 is twice as bright, 0.5 half. Must be greater than 0. Default 1. In Landscape with
+    // the procedural sky it multiplies an automatic exposure that follows the sun's height (1 from 30 degrees up,
+    // rising smoothly to 5 at night), so noon, golden hour and dusk all read well; dusk still comes out darker and
+    // warmer than noon. With a skybox there's no automatic part (see setSkybox).
     RENDERER_API Result<void> setExposure(float exposure);
     // The bound scene's background where nothing is drawn and there's no skybox (in Small; Landscape shows the
     // procedural sky), as the colour it shows on screen (linear 0..1, at any exposure). Default {0.1, 0.3, 0.6}.
@@ -338,7 +342,11 @@ namespace NRE {
     RENDERER_API Result<void> destroyCubemap(Handel<Cubemap> cubemap);
     // The bound scene's sky, drawn behind everything (3D only), as authored, in either lighting mode. An empty handle
     // removes it: the mode's own sky shows again (Small: the sky colour; Landscape: the procedural sky).
-    // Shaders can also sample it, e.g. for reflections: nreSky in nre/frame.glsl (set 0, binding 2), with
+    // It also lights the scene: nreAmbient's diffuse light and reflections are filtered from it (expanded from its
+    // display values like the backdrop), the first time a cubemap is made a skybox; that takes a moment and waits
+    // for the GPU, later calls with the same cubemap don't. A photo sky has a fixed, baked look, so it and its light
+    // stay at setExposure in Landscape too (no automatic exposure): at exposure 1 the scene looks as it does in Small.
+    // Shaders can also sample it, e.g. for custom effects: nreSky in nre/frame.glsl (set 0, binding 2), with
     // nreFrame.skyParams.x telling what it holds: 1 this cubemap (display values), 2 the procedural sky (linear light,
     // as drawn, without the sun's disk), 0 neither (a black cubemap).
     RENDERER_API Result<void> setSkybox(Handel<Cubemap> cubemap);

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -12,6 +13,8 @@
 
 #include "renderer.h"
 #include "renderer_unsafe.h"
+
+#include <vulkan/vulkan.h>
 
 using namespace NRE;
 using namespace NreTest;
@@ -994,8 +997,6 @@ NRE_SCENARIO(scene_switch) {
     return true;
 }
 
-// Landscape with a cubemap sky: shown as authored, whatever the automatic exposure (the sun is low here, so it's
-// about 3).
 // Landscape without setSun (intensity 0): night, not black. The dim blue night sky shows and lights a white box.
 NRE_SCENARIO(landscape_no_sun) {
     Session session(ApiMode::SceneMode);
@@ -1015,6 +1016,8 @@ NRE_SCENARIO(landscape_no_sun) {
     return true;
 }
 
+// Landscape with a cubemap sky: shown as authored. A photo sky has a fixed look, so there's no automatic exposure
+// with it (the sun is low here, where it would be about 3).
 NRE_SCENARIO(skybox_landscape) {
     Session session(ApiMode::SceneMode);
     bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
@@ -1022,6 +1025,195 @@ NRE_SCENARIO(skybox_landscape) {
     TRY(setSun(sunAt(5.0f), glm::vec3(1.0f), 3.0f));
     setUpClearDaySkybox();
     return matchesGolden(renderAndCapture(), "skybox.png");
+}
+
+namespace {
+    // A white 1 m box (noUv.obj: no material) on a 400 x 400 m white ground, 3 m ahead of a camera 1 m up looking at
+    // it. The camera sees its +z face, whose middle is at (0, 0.5, -2.5).
+    void setUpWhiteBoxScene() {
+        auto cube = TRY(createModel(TEST_ASSET_DIR "/noUv.obj"));
+        auto ground = TRY(createInstance(cube));
+        TRY(setInstanceTransform(ground, Transform{{0.0f, -0.05f, 0.0f}, glm::identity<glm::quat>(), {400.0f, 0.1f, 400.0f}}));
+        TRY(addInstanceToScene(ground));
+        auto box = TRY(createInstance(cube));
+        TRY(setInstanceTransform(box, Transform{{0.0f, 0.5f, -3.0f}, glm::identity<glm::quat>(), glm::vec3(1.0f)}));
+        TRY(addInstanceToScene(box));
+        TRY(setCameraPosition({0.0f, 1.0f, 0.0f}));
+        TRY(cameraLookAt({0.0f, 0.5f, -3.0f}));
+    }
+
+    // The average of the 40 x 40 px around the middle of the box's camera-facing (+z) face.
+    glm::vec3 boxFace(const Image& image) {
+        glm::vec2 p = toPixel({0.0f, 0.5f, -2.5f});
+        return image.average(uint32_t(p.x) - 20, uint32_t(p.y) - 20, uint32_t(p.x) + 20, uint32_t(p.y) + 20);
+    }
+
+    Handel<Cubemap> loadSkybox(const char* name) {
+        std::string dir = std::string(ASSET_DIR "/skyboxes/") + name + "/";
+        return TRY(createCubemap(dir + "right.png", dir + "left.png", dir + "top.png",
+                                 dir + "bottom.png", dir + "front.png", dir + "back.png"));
+    }
+}
+
+// Landscape at noon, the sun behind the box: its shadowed face is lit by the blue sky, so it's blue-tinted.
+NRE_SCENARIO(ambient_sky_blue) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    setUpWhiteBoxScene();
+    TRY(setSun(sunAt(60.0f), glm::vec3(1.0f), 3.0f));
+    Image image = renderAndCapture();
+    saveCapture(image, "ambient-sky-blue.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 face = boxFace(image);
+    std::printf("shadowed face (%.3f, %.3f, %.3f), luminance %.3f\n", face.r, face.g, face.b, luminance(face));
+    CHECK(face.b > face.r);
+    CHECK(luminance(face) > 0.05f);
+    return true;
+}
+
+// Small with the sunset skybox: the orange sky warms the box, even its sunlit face under a white sun.
+NRE_SCENARIO(ambient_sunset_warm) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSkybox(loadSkybox("sunset")));
+    placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));
+    setUpSun();   // lights the +z face the camera sees
+    Image image = renderAndCapture();
+    saveCapture(image, "ambient-sunset-warm.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 face = image.average(kWidth / 2 - 30, kHeight / 2 - 30, kWidth / 2 + 30, kHeight / 2 + 30);
+    std::printf("lit face (%.3f, %.3f, %.3f)\n", face.r, face.g, face.b);
+    CHECK(face.r > face.b);
+    return true;
+}
+
+// The example's scene (the car, no sun, no skybox) is no darker than before the lighting work: the ambient alone
+// lights it at least 90% as brightly as golden/car.png (the constant ambient of the time).
+NRE_SCENARIO(ambient_small_default) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpCar(true);
+    Image image = renderAndCapture();
+    saveCapture(image, "ambient-small-default.png");
+    Image before = loadPng(GOLDEN_DIR "/car.png");
+    CHECK(!image.pixels.empty() && !before.pixels.empty());
+    // The car covers roughly x 170..470, y 45..240.
+    float now = luminance(image.average(190, 60, 450, 190)), then = luminance(before.average(190, 60, 450, 190));
+    std::printf("car region luminance %.4f, golden car.png %.4f (%.1f%%)\n", now, then, 100.0f * now / then);
+    CHECK(now >= 0.9f * then);
+    return true;
+}
+
+// A skybox lighting the scene is destroyed: the scene goes back to the sky colour (background and ambient), and no
+// frame reads the destroyed cubemap or its filtered maps (validation would report it).
+NRE_SCENARIO(destroy_ibl_source) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));
+    setUpSun();
+    Image never = renderAndCapture();   // the same scene, never with a skybox
+    Handel<Cubemap> sky = loadSkybox("sunset");
+    TRY(setSkybox(sky));
+    Image lit = renderAndCapture();
+    TRY(destroyCubemap(sky));
+    Image last;
+    for (int frame = 0; frame < 3; ++frame) {
+        last = renderAndCapture();
+        CHECK(!last.pixels.empty());
+    }
+    saveCapture(lit, "destroy-ibl-source-before.png");
+    saveCapture(last, "destroy-ibl-source.png");
+    CHECK(!never.pixels.empty() && !lit.pixels.empty());
+    glm::vec3 clear{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    CHECK(near(last.at(10, 10), clear, 2.0f / 255.0f));
+    CHECK(fractionDifferent(last, never, kGoldenTolerance) <= kGoldenMaxFraction);
+    return true;
+}
+
+// R38: Landscape with a cubemap sky has no automatic exposure, so the skybox lights the scene as it does in Small.
+// The box's camera-facing face, turned away from the sun, is lit by the skybox alone: the same in Small, and in
+// Landscape with the sun at 60 or 5 degrees (where the automatic exposure would be about 3).
+NRE_SCENARIO(skybox_landscape_lighting) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpWhiteBoxScene();
+    TRY(setSkybox(loadSkybox("clear_day")));
+    TRY(setSun(sunAt(60.0f), glm::vec3(1.0f), 3.0f));
+    Image small = renderAndCapture();
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    Image high = renderAndCapture();
+    TRY(setSunDirection(sunAt(5.0f)));
+    Image low = renderAndCapture();
+    saveCapture(small, "skybox-landscape-lighting-small.png");
+    saveCapture(low, "skybox-landscape-lighting-5.png");
+    CHECK(!small.pixels.empty() && !high.pixels.empty() && !low.pixels.empty());
+    float s = luminance(boxFace(small)), h = luminance(boxFace(high)), l = luminance(boxFace(low));
+    std::printf("face away from the sun: Small %.3f, Landscape 60 deg %.3f, 5 deg %.3f\n", s, h, l);
+    CHECK(s > 0.05f);
+    CHECK(std::abs(h - s) <= 0.03f * s);
+    CHECK(std::abs(l - s) <= 0.03f * s);
+    return true;
+}
+
+// The sky's light on objects follows the sun on every frame in flight: after a big move, consecutive frames are
+// identical (each slot refiltered its own IBL), and the shadowed face changed.
+NRE_SCENARIO(ambient_follows_sun) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    setUpWhiteBoxScene();
+    TRY(setSun(sunAt(60.0f), glm::vec3(1.0f), 3.0f));
+    Image noon = renderAndCapture();
+    Image noon2 = renderAndCapture();
+    TRY(setSunDirection(sunAt(8.0f)));
+    Image low = renderAndCapture();
+    Image low2 = renderAndCapture();
+    Image low3 = renderAndCapture();
+    CHECK(!noon.pixels.empty() && !noon2.pixels.empty() && !low.pixels.empty() && !low2.pixels.empty() && !low3.pixels.empty());
+    CHECK(fractionDifferent(noon, noon2, 1.0f / 255.0f) == 0.0f);
+    CHECK(fractionDifferent(low, low2, 1.0f / 255.0f) == 0.0f);
+    CHECK(fractionDifferent(low, low3, 1.0f / 255.0f) == 0.0f);
+    glm::vec3 a = boxFace(noon), b = boxFace(low);
+    std::printf("shadowed face: 60 deg (%.3f, %.3f, %.3f), 8 deg (%.3f, %.3f, %.3f)\n", a.r, a.g, a.b, b.r, b.g, b.b);
+    CHECK(!near(a, b, 3.0f / 255.0f));
+    return true;
+}
+
+// Not a CTest test (R3): run it by hand on a Release build. 2560 x 1600, Landscape, the demo car on a 2 km ground,
+// the sun turning 0.5 degrees a frame around the vertical, 30 degrees up (so it always casts shadows, and the sky and
+// its IBL are recomputed every frame). Prints the mean frame time over 600 frames after 60 warm-up frames; the
+// target is 6.06 ms (165 fps).
+NRE_SCENARIO(perf_landscape) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(Unsafe::setRenderTarget(2560, 1600));
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto ground = TRY(createInstance(box));
+    TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
+    TRY(addInstanceToScene(ground));
+    setUpCar(true);
+    TRY(setCameraPosition({2.5f, 1.5f, 1.0f}));
+    TRY(cameraLookAt({0.0f, 0.3f, -3.0f}));
+    TRY(setSun(sunAt(30.0f), glm::vec3(1.0f), 3.0f));
+    constexpr int warmup = 60, frames = 600;
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point start;
+    for (int frame = 0; frame < warmup + frames; ++frame) {
+        if (frame == warmup) {
+            vkDeviceWaitIdle(Unsafe::getDevice());
+            start = Clock::now();
+        }
+        TRY(setSunDirection(sunAt(30.0f, 0.5f * float(frame))));
+        TRY(renderFrame());
+        TRY(submitFrame());
+        TRY(presentFrame());
+    }
+    vkDeviceWaitIdle(Unsafe::getDevice());
+    double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count() / frames;
+    std::printf("mean frame %.3f ms (%.0f fps) over %d frames at 2560x1600\n", ms, 1000.0 / ms, frames);
+    return true;
 }
 
 int main(int argc, char** argv) {

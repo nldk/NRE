@@ -74,8 +74,8 @@ namespace NRE {
         const VkExtent2D hdrExtent = toneMap.hdrExtent();
         const bool haveHdr = toneMap.hdrImage() != VK_NULL_HANDLE && hdrExtent.width == extent.width && hdrExtent.height == extent.height;
 
-        // The procedural sky's cubemap for this frame slot, recomputed if the sun moved (compute, then a barrier to
-        // the fragment shaders that read it). Before the main pass, which samples it (sky pass, ambient).
+        // The procedural sky's cubemap and IBL for this frame slot, recomputed if the sun moved (compute, then a barrier
+        // to the fragment shaders that read them). Before the main pass, which samples them (sky pass, ambient).
         if (haveHdr && scene && scene->skySource == SkySource::Procedural) v.sky.update(cmd, scene->sunDirection, scene->skyBrightness);
         // The sun's shadow maps, from the same draws (writeFrameData() set the cascades). Before the main pass, which
         // samples them.

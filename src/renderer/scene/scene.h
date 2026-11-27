@@ -58,12 +58,13 @@ namespace NRE {
         VkDescriptorSet frameSets[max_frames_in_flight]{};
         PerFrameBuffer UBO;
         PerFrameBuffer Lights;
-        // What binding 2 of each frame's set points at: the skybox, the procedural sky (that frame slot's cubemap), or
-        // with neither the default (black) cubemap. Kept as handles, not views: a destroyed cubemap's handle never
-        // matches again, even if Vulkan reuses its view's value.
+        // What bindings 2 (the sky), 4 and 5 (its IBL) of each frame's set point at: the skybox and its IBL, the
+        // procedural sky (that frame slot's cubemap and IBL), or with neither the default (black) cubemap. Kept as
+        // handles, not views: a destroyed cubemap's handle never matches again, even if Vulkan reuses its view's value.
         struct SkyBinding {
             Handel<Cubemap> skybox;
             bool procedural = false;
+            bool ibl = false;   // 4 and 5 show the sky's IBL (else the default cubemap)
             bool operator==(const SkyBinding&) const = default;
         };
         SkyBinding skyInSet[max_frames_in_flight]{};
@@ -91,8 +92,8 @@ namespace NRE {
         // Sun shadow cascades this frame (0 = none), set by writeFrameData() with their matrices; the shadow pass draws
         // this many.
         uint32_t shadowCascades = 0;
-        // This frame's sky source and tone-map exposure (setExposure x, in Landscape, the automatic exposure), set by
-        // writeFrameData().
+        // This frame's sky source and tone-map exposure (setExposure x, in Landscape with the procedural sky, the
+        // automatic exposure), set by writeFrameData().
         SkySource skySource = SkySource::Color;
         float frameExposure = 1.0f;
         // The procedural sky's scattering brightness this frame (sun intensity / 3; 0 without a sun or procedural

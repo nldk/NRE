@@ -18,7 +18,8 @@ namespace NRE {
         // Every set with the material layout: 3 textures (base colour, metallic-roughness, normal) + 1 factor UBO.
         constexpr uint32_t materialLayoutSets = materialSets + builtInSets;
         constexpr uint32_t texturesPerMaterial = 3;
-        // The built-in compute passes (ComputePipeline::allocateSet): the sky's LUT and cubemap passes, room to spare.
+        // The built-in compute passes (ComputePipeline::allocateSet): the sky's LUT and cubemap passes and the BRDF
+        // LUT's, room to spare. (Each Ibl allocates its passes' sets from its own pool.)
         // Each set has at most this many storage images and sampled images.
         constexpr uint32_t computeSets = 16;
         constexpr uint32_t imagesPerComputeSet = 2;
@@ -55,7 +56,7 @@ namespace NRE {
         VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         frameSets + materialLayoutSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         frameSets},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, texturesPerMaterial * materialLayoutSets + 2 * frameSets   // frame sets: sky, shadow map
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, texturesPerMaterial * materialLayoutSets + 5 * frameSets   // frame sets: sky, shadow map, IBL x 3
                                                     + imagesPerComputeSet * computeSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          imagesPerComputeSet * computeSets},
         };

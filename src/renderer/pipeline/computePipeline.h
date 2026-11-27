@@ -6,7 +6,7 @@
 #include "renderer.h"
 
 namespace NRE {
-    // An internal compute pipeline (the sky's LUT and cubemap passes): its own descriptor set layout (set 0, from
+    // An internal compute pipeline (the sky's and the IBL's passes): its own descriptor set layout (set 0, from
     // the bindings given) and push constants, nothing of the scene's sets. Owned by the pass that uses it, which
     // calls destroy() in shutdown(), before the device goes.
     class ComputePipeline {
@@ -26,6 +26,8 @@ namespace NRE {
                             uint32_t pushConstantSize);
         // A set with this pipeline's layout, from the renderer's descriptor pool (freed with it at shutdown).
         Result<VkDescriptorSet> allocateSet() const;
+        // The same from another pool (e.g. one its owner destroys to give the sets back).
+        Result<VkDescriptorSet> allocateSet(VkDescriptorPool pool) const;
         // Binds the pipeline and set (as set 0), pushes pushConstantSize bytes from push (may be null when that's
         // 0) and dispatches x * y * z work groups. Outside a render pass; the caller places the barriers.
         void dispatch(VkCommandBuffer commandBuffer, VkDescriptorSet set, const void* push, uint32_t x, uint32_t y, uint32_t z) const;

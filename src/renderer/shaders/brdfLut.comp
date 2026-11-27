@@ -1,0 +1,34 @@
+#version 450
+// Built into librenderer (IblFilter::create, once): the split-sum environment BRDF. Texel (x, y) holds, for
+// NdotV = x and perceptual roughness = y (texel centres), the scale A and bias B of F0 in
+//     integral of the specular BRDF x cos over the hemisphere = F0 * A + B
+// (r = A, g = B). GGX importance sampled with the same D and V as the direct light (nre/lighting.glsl).
+#include "ggx.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D lut;
+
+const uint sampleCount = 1024u;
+
+void main() {
+    ivec2 size = imageSize(lut);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= size.x || p.y >= size.y) return;
+    float NdotV = (float(p.x) + 0.5) / float(size.x);
+    float a = ggxAlpha((float(p.y) + 0.5) / float(size.y));
+    vec3 V = vec3(sqrt(1.0 - NdotV * NdotV), 0.0, NdotV);   // the normal is +z
+
+    vec2 sum = vec2(0.0);
+    for (uint i = 0u; i < sampleCount; ++i) {
+        vec3 H = sampleGGX(hammersley(i, sampleCount), a);
+        float VdotH = dot(V, H);
+        vec3 L = 2.0 * VdotH * H - V;
+        float NdotL = L.z;
+        if (NdotL <= 0.0 || VdotH <= 0.0) continue;
+        // BRDF x cos / pdf(L), with pdf(L) = D * NdotH / (4 VdotH): D cancels.
+        float g = ggxVisibility(NdotV, NdotL, a) * 4.0 * NdotL * VdotH / max(H.z, 1e-6);
+        float fc = pow(1.0 - VdotH, 5.0);
+        sum += vec2(g * (1.0 - fc), g * fc);
+    }
+    imageStore(lut, p, vec4(sum / float(sampleCount), 0.0, 1.0));
+}

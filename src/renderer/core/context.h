@@ -12,6 +12,7 @@
 #include "core/frameRecorder.h"
 #include "post/toneMap.h"
 #include "lighting/shadows.h"
+#include "lighting/ibl.h"
 #include "lighting/sky.h"
 namespace NRE {
     struct Frame {
@@ -62,6 +63,8 @@ namespace NRE {
         Handel<Material> defaultMaterial;
         // 1x1 black faces: what set 0 binding 2 shows while a scene has no skybox.
         Handel<Cubemap> defaultCubemap;
+        // The IBL passes and the BRDF LUT (set 0 binding 6 of every scene), shared by every Ibl.
+        IblFilter iblFilter;
         // The procedural sky and the sky pass (cubemap or procedural), shared by all scenes.
         Sky sky;
         // The HDR scene target and the pass that tone maps it to the window / render target.

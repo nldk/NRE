@@ -1,9 +1,11 @@
 #pragma once
 #include <array>
+#include <memory>
 #include <string>
 #include <vulkan/vulkan_core.h>
 
 #include "image.h"
+#include "lighting/ibl.h"
 #include "renderer.h"
 
 namespace NRE {
@@ -11,6 +13,8 @@ namespace NRE {
     // (createStorage) for cubemaps the renderer computes itself, like the procedural sky.
     class Cubemap {
         Image image;
+        // As a skybox: its light on objects (filterIbl), made the first time it's needed and destroyed with it.
+        std::unique_ptr<Ibl> ibl;
     public:
         // Faces in Vulkan's (and OpenGL's) layer order: +X, -X, +Y, -Y, +Z, -Z. Loaded as color (sRGB).
         Result<void> load(const std::array<std::string, 6>& paths);
@@ -26,5 +30,10 @@ namespace NRE {
         [[nodiscard]] VkImageView getMipView(uint32_t level) const { return image.getMipView(level); }
         [[nodiscard]] uint32_t getMipLevels() const { return image.getMipLevels(); }
         [[nodiscard]] uint32_t getSize() const { return image.getExtent().width; }
+        // An LDR cubemap (load / uploadFaces) as a skybox: filters its IBL once (blocking), the first time; afterwards
+        // does nothing. Its contents never change, so frames may read it as soon as this returns.
+        Result<void> filterIbl();
+        // The filtered IBL, or null if filterIbl() wasn't called or failed.
+        [[nodiscard]] const Ibl* getIbl() const { return ibl.get(); }
     };
 }

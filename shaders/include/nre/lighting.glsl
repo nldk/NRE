@@ -274,53 +274,33 @@ vec3 nreLights(Surface s) {
     return color;
 }
 
-// The procedural sky (nreFrame.skyParams.x == 2) around dir, blurred by reading a smaller mip of its cubemap:
-// lod 0 is the sharp sky. Linear light, as drawn (the sunlit sky at the sun's intensity, plus the night floor).
-vec3 nre_proceduralSky(vec3 dir, float lod) {
-    return textureLod(nreSky, dir, lod).rgb;
-}
-
-// The sky as seen around dir. blurWidth 1 gives the cosine-weighted average around dir (the irradiance), smaller
-// values sharper reflections.
-// Procedural sky: read from its cubemap's mips, its ground below the horizon included. The irradiance is five taps
-// of a mip with ~22 degree texels, around dir.
-// Otherwise a sky/ground hemisphere: radiance from above is the sky colour, from below a dim grey ground.
+// The sky colour's hemisphere, for scenes without an IBL (the sky colour as the sky): radiance from above is the sky
+// colour, from below a dim grey ground. blurWidth 1 gives the cosine-weighted average around dir (the irradiance),
+// smaller values sharper reflections.
 vec3 nre_hemisphere(vec3 dir, float blurWidth) {
-    if (nreFrame.skyParams.x == 2.0) {
-        float top = float(textureQueryLevels(nreSky) - 1);
-        if (blurWidth < 1.0) return nre_proceduralSky(dir, top * sqrt(clamp(blurWidth, 0.0, 1.0)));
-        vec3 n = normalize(dir);
-        vec3 t = normalize(cross(abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), n));
-        vec3 b = cross(n, t);
-        float lod = max(top - 2.0, 0.0);   // 4x4 texels per face
-        // The centre and four taps 60 degrees off it, cosine-weighted (cos 60 = 0.5).
-        vec3 sum = nre_proceduralSky(n, lod);
-        sum += 0.5 * (nre_proceduralSky(0.5 * n + 0.866 * t, lod) + nre_proceduralSky(0.5 * n - 0.866 * t, lod)
-                    + nre_proceduralSky(0.5 * n + 0.866 * b, lod) + nre_proceduralSky(0.5 * n - 0.866 * b, lod));
-        return sum / 3.0;
-    }
     vec3 sky = nreFrame.skyColor.rgb;
     vec3 ground = vec3(dot(sky, vec3(0.2126, 0.7152, 0.0722)) * 0.3);
     return mix(ground, sky, clamp(0.5 + 0.5 * dir.y / blurWidth, 0.0, 1.0));
 }
 
-// Split-sum environment BRDF (scale, bias for F0), Karis' analytic fit for mobile.
-vec2 nre_environmentBRDF(float NdotV, float roughness) {
-    const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
-    const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
-    vec4 r = roughness * c0 + c1;
-    float a004 = min(r.x * r.x, exp2(-9.28 * NdotV)) * r.x + r.y;
-    return vec2(-1.04, 1.04) * a004 + r.zw;
-}
-
+// Image-based: the diffuse light from nreIrradiance, reflections from nreSpecular scaled by the split-sum BRDF from
+// nreBrdfLut (F0 * A + B). Without an IBL (skyParams.y 0: the sky colour) the same with the sky colour's hemisphere.
 vec3 nreAmbient(Surface s) {
     vec3 N = s.normal;
-    float NdotV = max(dot(N, s.view), 1e-4);
-    vec3 diffuse = s.albedo * (1.0 - s.metallic) * nre_hemisphere(N, 1.0);
-    vec2 env = nre_environmentBRDF(NdotV, clamp(s.roughness, 0.0, 1.0));
     vec3 R = reflect(-s.view, N);
-    vec3 specular = nre_hemisphere(R, max(nre_alphaRoughness(s.roughness), 0.02)) * (nre_F0(s) * env.x + env.y);
-    return diffuse + specular;
+    float NdotV = max(dot(N, s.view), 1e-4);
+    float roughness = clamp(s.roughness, 0.0, 1.0);
+    vec2 env = textureLod(nreBrdfLut, vec2(NdotV, roughness), 0.0).rg;
+    float specularMips = nreFrame.skyParams.y;
+    vec3 irradiance, reflected;
+    if (specularMips > 0.0) {
+        irradiance = textureLod(nreIrradiance, N, 0.0).rgb;
+        reflected = textureLod(nreSpecular, R, roughness * (specularMips - 1.0)).rgb;
+    } else {
+        irradiance = nre_hemisphere(N, 1.0);
+        reflected = nre_hemisphere(R, max(nre_alphaRoughness(roughness), 0.02));
+    }
+    return s.albedo * (1.0 - s.metallic) * irradiance + reflected * (nre_F0(s) * env.x + env.y);
 }
 
 vec3 nreApplyHaze(vec3 color, vec3 worldPos) {

@@ -64,6 +64,24 @@ namespace NRE {
         return c->vulkan.descriptorPool.allocateDescriptorSet(setLayout);
     }
 
+    Result<VkDescriptorSet> ComputePipeline::allocateSet(VkDescriptorPool pool) const {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+        VkDescriptorSetLayout layoutHandle = setLayout.getDescriptorSetLayout();
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool = pool;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &layoutHandle;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        if (VkResult r = vkAllocateDescriptorSets(c->vulkan.device, &ai, &set); r != VK_SUCCESS) {
+            auto error = Error{ErrorCode::DescriptorCreationFailed, "Failed to allocate a built-in compute pass's descriptor set: "
+                               + std::string(ErrorHandeling::vkResultName(r))};
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);   // there's no usable set to hand back, whatever the policy
+        }
+        return set;
+    }
+
     void ComputePipeline::dispatch(VkCommandBuffer cmd, VkDescriptorSet set, const void* push, uint32_t x, uint32_t y, uint32_t z) const {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr);

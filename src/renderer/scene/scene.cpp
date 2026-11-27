@@ -67,7 +67,10 @@ namespace NRE {
         // No sun at all (intensity 0) is night, wherever its direction points: the night exposure (as at -10 degrees
         // and below), only the night floor in the sky.
         const float exposureElevation = sunIntensity > 0.0f ? elevation : -1.5707963f;
-        frameExposure = exposure * (landscape ? LightingMath::autoExposure(exposureElevation) : 1.0f);
+        // Only with the procedural sky: a cubemap sky has a fixed, baked look, so it and its light on objects stay at
+        // setExposure, as in Small.
+        const bool autoExposure = landscape && skySource == SkySource::Procedural;
+        frameExposure = exposure * (autoExposure ? LightingMath::autoExposure(exposureElevation) : 1.0f);
 
         // Sun shadows (3D, with a sun): cascades splitting the view from the near plane to the shadow distance.
         const ShadowMaps& shadows = c->vulkan.shadowMaps;
@@ -102,17 +105,29 @@ namespace NRE {
         // standard look), the night floor doesn't. Sky::update bakes both into the cubemap.
         skyBrightness = skySource == SkySource::Procedural
                       ? std::max(sunIntensity, 0.0f) / float(LightingMath::Atmosphere::standardIntensity) : 0.0f;
-        fd.skyParams = glm::vec4(float(uint32_t(skySource)), 0.0f, skyBrightness, 0.0f);
+        // The sky's light on objects (nreAmbient): the IBL filtered from this frame's sky, if it has one (the
+        // procedural sky always does when it's ready; a skybox once setSkybox filtered it). Without one (the sky
+        // colour, or a failed filter) the specular mip count is 0 and nreAmbient uses the sky colour's hemisphere.
+        const Ibl* ibl = nullptr;
+        if (skySource == SkySource::Procedural) ibl = &c->vulkan.sky.ibl(frame);
+        else if (skySource == SkySource::Cubemap) ibl = c->manager.get(sky)->getIbl();
+        if (ibl && !ibl->ready()) ibl = nullptr;
+        fd.skyParams = glm::vec4(float(uint32_t(skySource)), ibl ? float(ibl->specularMips()) : 0.0f, skyBrightness, 0.0f);
         fd.hazeParams = glm::vec4(0.0f);
         if (auto r = UBO.write(frame, &fd, sizeof(fd)); !r) return r;
 
         // The caller waited on this frame's fence, so its set is free to rewrite. The procedural sky of frame slot f
         // is always the Sky's cubemap f, the one only that slot's frames read and write.
-        const SkyBinding wanted{skySource == SkySource::Cubemap ? sky : Handel<Cubemap>{}, skySource == SkySource::Procedural};
+        const SkyBinding wanted{skySource == SkySource::Cubemap ? sky : Handel<Cubemap>{}, skySource == SkySource::Procedural,
+                                ibl != nullptr};
         if (wanted != skyInSet[frame]) {
+            const VkImageView none = c->manager.get(c->vulkan.defaultCubemap)->getView();
             VkImageView view = wanted.procedural ? c->vulkan.sky.cubemapView(frame)
-                             : c->manager.get(wanted.skybox == Handel<Cubemap>{} ? c->vulkan.defaultCubemap : wanted.skybox)->getView();
+                             : wanted.skybox != Handel<Cubemap>{} ? c->manager.get(wanted.skybox)->getView() : none;
             if (auto r = writeImageDescriptor(frameSets[frame], 2, view, c->vulkan.sampler); !r) return r;
+            const VkSampler iblSampler = c->vulkan.iblFilter.ready() ? c->vulkan.iblFilter.sampler() : c->vulkan.sampler;
+            if (auto r = writeImageDescriptor(frameSets[frame], 4, ibl ? ibl->irradianceView() : none, iblSampler); !r) return r;
+            if (auto r = writeImageDescriptor(frameSets[frame], 5, ibl ? ibl->specularView() : none, iblSampler); !r) return r;
             skyInSet[frame] = wanted;
         }
         return Lights.write(frame, gpuLights.data(), gpuLights.size() * sizeof(GpuLight));
@@ -154,10 +169,19 @@ namespace NRE {
         if (!err) return err;
         err = Lights.attach(frameSets,1);
         if (!err) return err;
-        // Binding 2 always points at a cubemap, so shaders may sample it whether or not there's a skybox.
+        // Bindings 2, 4 and 5 always point at a cubemap, so shaders may sample them whether or not there's a sky.
+        // Binding 6: the BRDF LUT, the same for every frame and scene. Without the IBL passes (they failed under
+        // RenderErrorPolicy::Ignore) it shows the white texture; the IBL is then never used, and the hemisphere's
+        // reflections come out too bright, but finite.
         Cubemap* defaultCubemap = c->manager.get(c->vulkan.defaultCubemap);
+        const IblFilter& ibl = c->vulkan.iblFilter;
         for (VkDescriptorSet set : frameSets) {
-            err = writeImageDescriptor(set, 2, defaultCubemap->getView(), c->vulkan.sampler);
+            for (uint32_t binding : {2u, 4u, 5u}) {
+                err = writeImageDescriptor(set, binding, defaultCubemap->getView(), c->vulkan.sampler);
+                if (!err) return err;
+            }
+            err = ibl.ready() ? writeImageDescriptor(set, 6, ibl.brdfLutView(), ibl.sampler())
+                              : writeImageDescriptor(set, 6, c->manager.get(c->vulkan.whiteTexture)->getView(), c->vulkan.sampler);
             if (!err) return err;
         }
         // Binding 3: the sun's shadow maps, shared by every scene. Missing only if init() failed to make them under

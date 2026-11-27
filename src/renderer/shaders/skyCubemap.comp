@@ -7,6 +7,7 @@
 // sun's intensity. The sun disk isn't in it (sky.frag draws it). Matches render() in tests/tools/skyPrototype.py,
 // except that the light's optical depth comes from the LUT.
 #include "atmosphere.glsl"
+#include "cubeFaces.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 0) uniform sampler2D transmittanceLut;
@@ -14,19 +15,6 @@ layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray sky;   // 6
 layout(push_constant) uniform PC {
     vec4 toSun;   // xyz: unit vector toward the sun, w: scattering brightness (sun intensity / 3)
 } pc;
-
-// The direction through texel st (-1..1, from the face's top left) of a cube face, in Vulkan's face order and
-// orientation (+X, -X, +Y, -Y, +Z, -Z), as a samplerCube looks it up.
-vec3 faceDirection(int face, vec2 st) {
-    switch (face) {
-        case 0: return vec3(1.0, -st.y, -st.x);
-        case 1: return vec3(-1.0, -st.y, st.x);
-        case 2: return vec3(st.x, 1.0, st.y);
-        case 3: return vec3(st.x, -1.0, -st.y);
-        case 4: return vec3(st.x, -st.y, 1.0);
-        default: return vec3(-st.x, -st.y, -1.0);
-    }
-}
 
 // The sunlit part at the standard intensity (3), without the night floor.
 vec3 sunlitRadiance(vec3 d, vec3 s) {
@@ -82,8 +70,7 @@ void main() {
     ivec3 p = ivec3(gl_GlobalInvocationID);
     ivec2 size = imageSize(sky).xy;
     if (p.x >= size.x || p.y >= size.y) return;
-    vec2 st = (vec2(p.xy) + 0.5) / vec2(size) * 2.0 - 1.0;
-    vec3 d = normalize(faceDirection(p.z, st));
+    vec3 d = texelDirection(p, size.x);
     // No sunlight at all (intensity 0): only the night floor, and the sun's direction doesn't matter.
     vec3 sunlit = pc.toSun.w > 0.0 ? sunlitRadiance(d, normalize(pc.toSun.xyz)) * pc.toSun.w : vec3(0.0);
     imageStore(sky, p, vec4(sunlit + nightFloor(d), 1.0));

@@ -23,7 +23,8 @@ layout(set = 0, binding = 0) uniform NreFrame {
     vec4 shadowParams;             // 400: x: cascade count (0 = no sun shadows), y: normal offset in shadow-map texels
     vec4 sunRadiance;              // 416: rgb: sunlight reaching objects (Landscape: through the atmosphere), w: 1 if the sun is up
     vec4 skyColor;                 // 432: rgb: the sky colour as linear light
-    vec4 skyParams;                // 448: x: sky source (0 colour, 1 cubemap, 2 procedural), y: specular mips,
+    vec4 skyParams;                // 448: x: sky source (0 colour, 1 cubemap, 2 procedural), y: nreSpecular's mip
+                                   //      count (0: no IBL, nreAmbient uses the sky colour's hemisphere),
                                    //      z: procedural sky's scattering brightness (sun intensity / 3; nreSky
                                    //      already includes it, plus the night floor that doesn't scale), else 0
     vec4 hazeParams;               // 464: x: density per metre (0 = off), y: 1 / haze height
@@ -39,5 +40,16 @@ layout(set = 0, binding = 2) uniform samplerCube nreSky;
 // The sun's shadow maps: one layer per cascade (nreFrame.shadowParams.x of them), standard depth (0 at the light).
 // A comparison sampler: texture(nreShadowMap, vec4(uv, cascade, depth)) gives 1 where lit. Use nreSunShadow.
 layout(set = 0, binding = 3) uniform sampler2DArrayShadow nreShadowMap;
+
+// The sky's light on objects (image-based lighting), filtered from this frame's sky. Used by nreAmbient; valid when
+// nreFrame.skyParams.y (the specular mip count) is above 0, otherwise both are a black cubemap.
+//   nreIrradiance: for a normal n, the cosine-weighted average of the sky's radiance over n's hemisphere (linear),
+//                  so a Lambert surface of albedo a gets a * texture(nreIrradiance, n).
+//   nreSpecular:   the sky prefiltered for GGX reflections: lod roughness * (skyParams.y - 1), looked up along the
+//                  reflected view direction.
+layout(set = 0, binding = 4) uniform samplerCube nreIrradiance;
+layout(set = 0, binding = 5) uniform samplerCube nreSpecular;
+// The split-sum environment BRDF: at (NdotV, perceptual roughness), r and g are the scale and bias of F0.
+layout(set = 0, binding = 6) uniform sampler2D nreBrdfLut;
 
 #endif
