@@ -882,7 +882,8 @@ NRE_SCENARIO(sky_follows_sun) {
     CHECK(fractionDifferent(noon, noon2, 1.0f / 255.0f) == 0.0f);
     CHECK(fractionDifferent(low, low2, 1.0f / 255.0f) == 0.0f);
     CHECK(fractionDifferent(low, low3, 1.0f / 255.0f) == 0.0f);
-    // 0.1 degrees: the cubemap isn't regenerated, only the automatic exposure follows the sun (by about 1%).
+    // 0.1 degrees, under the threshold 10 degrees up (about 0.11, LightingMath::skyRegenerateAngle): the cubemap isn't
+    // regenerated, only the automatic exposure follows the sun (by about 1%).
     float nudgedChange = fractionDifferent(low, nudged, 3.0f / 255.0f);
     std::printf("changed by the 0.1 degree move: %.3f%%\n", nudgedChange * 100.0f);
     CHECK(nudgedChange < 0.01f);
@@ -1180,40 +1181,84 @@ NRE_SCENARIO(ambient_follows_sun) {
     return true;
 }
 
-// Not a CTest test (R3): run it by hand on a Release build. 2560 x 1600, Landscape, the demo car on a 2 km ground,
-// the sun turning 0.5 degrees a frame around the vertical, 30 degrees up (so it always casts shadows, and the sky and
-// its IBL are recomputed every frame). Prints the mean frame time over 600 frames after 60 warm-up frames; the
-// target is 6.06 ms (165 fps).
-NRE_SCENARIO(perf_landscape) {
+// The sky near the horizon changes fast as the sun moves, so there it's regenerated after much smaller moves (R39):
+// a sun setting slowly (0.02 degrees a frame around 1 degree, the sun in view) changes the frame by at most 1/255 on
+// average from one frame to the next, with no pops where the sky (and its light on the box) catches up.
+NRE_SCENARIO(sky_sunset_smooth) {
     Session session(ApiMode::SceneMode);
-    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
-    TRY(Unsafe::setRenderTarget(2560, 1600));
-    TRY(setSceneLighting(SceneLighting::Landscape));
-    auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
-    auto ground = TRY(createInstance(box));
-    TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
-    TRY(addInstanceToScene(ground));
-    setUpCar(true);
-    TRY(setCameraPosition({2.5f, 1.5f, 1.0f}));
-    TRY(cameraLookAt({0.0f, 0.3f, -3.0f}));
-    TRY(setSun(sunAt(30.0f), glm::vec3(1.0f), 3.0f));
-    constexpr int warmup = 60, frames = 600;
-    using Clock = std::chrono::steady_clock;
-    Clock::time_point start;
-    for (int frame = 0; frame < warmup + frames; ++frame) {
-        if (frame == warmup) {
-            vkDeviceWaitIdle(Unsafe::getDevice());
-            start = Clock::now();
+    setUpSkyScene(1.3f, 20.0f);
+    placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));
+    TRY(setCameraPosition({0.0f, 0.3f, 0.0f}));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    Image previous = renderAndCapture();
+    CHECK(!previous.pixels.empty());
+    float worst = 0.0f, worstAt = 0.0f;
+    for (int i = 1; i <= 30; ++i) {
+        float elevation = 1.3f - 0.02f * float(i);
+        TRY(setSunDirection(sunAt(elevation, 20.0f)));
+        Image image = renderAndCapture();
+        CHECK(!image.pixels.empty());
+        double change = 0.0;   // mean over the pixels of the largest channel difference
+        for (size_t k = 0; k < image.pixels.size(); ++k) {
+            glm::vec3 d = glm::abs(image.pixels[k] - previous.pixels[k]);
+            change += std::max({d.x, d.y, d.z});
         }
-        TRY(setSunDirection(sunAt(30.0f, 0.5f * float(frame))));
-        TRY(renderFrame());
-        TRY(submitFrame());
-        TRY(presentFrame());
+        float mean = float(change / double(image.pixels.size()));
+        if (mean > worst) { worst = mean; worstAt = elevation; }
+        previous = std::move(image);
     }
-    vkDeviceWaitIdle(Unsafe::getDevice());
-    double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count() / frames;
-    std::printf("mean frame %.3f ms (%.0f fps) over %d frames at 2560x1600\n", ms, 1000.0 / ms, frames);
+    std::printf("largest mean change between frames 0.02 degrees apart: %.2f/255 (at %+.2f degrees)\n", worst * 255.0f, worstAt);
+    CHECK(worst <= 1.0f / 255.0f);
     return true;
+}
+
+namespace {
+    // The perf scenarios (not CTest tests, R3: run them by hand on a Release build): 2560 x 1600, Landscape, the demo
+    // car on a 2 km ground, the sun at sunPath(frame). Prints the mean frame time over 600 frames after 60 warm-up
+    // frames; the target is 6.06 ms (165 fps).
+    bool measureLandscapeFrames(glm::vec3 (*sunPath)(int frame)) {
+        Session session(ApiMode::SceneMode);
+        bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+        TRY(Unsafe::setRenderTarget(2560, 1600));
+        TRY(setSceneLighting(SceneLighting::Landscape));
+        auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+        auto ground = TRY(createInstance(box));
+        TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
+        TRY(addInstanceToScene(ground));
+        setUpCar(true);
+        TRY(setCameraPosition({2.5f, 1.5f, 1.0f}));
+        TRY(cameraLookAt({0.0f, 0.3f, -3.0f}));
+        TRY(setSun(sunPath(0), glm::vec3(1.0f), 3.0f));
+        constexpr int warmup = 60, frames = 600;
+        using Clock = std::chrono::steady_clock;
+        Clock::time_point start;
+        for (int frame = 0; frame < warmup + frames; ++frame) {
+            if (frame == warmup) {
+                vkDeviceWaitIdle(Unsafe::getDevice());
+                start = Clock::now();
+            }
+            TRY(setSunDirection(sunPath(frame)));
+            TRY(renderFrame());
+            TRY(submitFrame());
+            TRY(presentFrame());
+        }
+        vkDeviceWaitIdle(Unsafe::getDevice());
+        double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count() / frames;
+        std::printf("mean frame %.3f ms (%.0f fps) over %d frames at 2560x1600\n", ms, 1000.0 / ms, frames);
+        return true;
+    }
+}
+
+// The sun turning 0.5 degrees a frame around the vertical, 30 degrees up: it always casts shadows, and the sky and
+// its IBL are recomputed every frame.
+NRE_SCENARIO(perf_landscape) {
+    return measureLandscapeFrames([](int frame) { return sunAt(30.0f, 0.5f * float(frame)); });
+}
+
+// A slow sunset: the sun 1 degree up, moving 0.02 degrees a frame (around the vertical, so it stays at the horizon
+// with its long shadows). Near the horizon that's enough to recompute the sky and its IBL every frame (R39).
+NRE_SCENARIO(perf_landscape_sunset) {
+    return measureLandscapeFrames([](int frame) { return sunAt(1.0f, 0.02f * float(frame)); });
 }
 
 int main(int argc, char** argv) {

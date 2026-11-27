@@ -22,8 +22,8 @@ namespace NRE {
     // Frames in flight: there's one cubemap per frame slot (currentFrame % max_frames_in_flight), so a frame only
     // ever writes the cubemap that its own slot's previous frame (whose fence was waited on) read: never one a frame
     // still on the GPU uses. The scene's set 0 binding 2 of slot f points at cubemapView(f). The sky is regenerated
-    // when the brightness changed or the sun moved more than regenerateAngle from the sun of the last regeneration
-    // (with brightness 0 the sun's direction doesn't matter); each slot then catches up once to that same sky, so all
+    // when the brightness changed or the sun moved more than LightingMath::skyRegenerateAngle (0.25 degrees high up,
+    // 0.015 near the horizon, where the sky changes fast) from the sun of the last regeneration (with brightness 0 the sun's direction doesn't matter); each slot then catches up once to that same sky, so all
     // slots show the same sky and consecutive frames never alternate between two. Each slot's IBL (its light on
     // objects) is refiltered from that slot's cubemap right after it's regenerated, so it always matches it.
     //
@@ -48,7 +48,6 @@ namespace NRE {
     public:
         static constexpr uint32_t lutWidth = 256, lutHeight = 64;
         static constexpr uint32_t cubemapSize = 256;
-        static constexpr float regenerateAngle = 0.25f * 3.14159265f / 180.0f;   // radians
         // The LUT (computed here, waiting for it), the cubemaps and IBLs (all mips in SHADER_READ_ONLY_OPTIMAL,
         // contents undefined until update()), the compute pipelines and the draw pipeline. Needs the descriptor pool,
         // the shared sampler and the IblFilter.

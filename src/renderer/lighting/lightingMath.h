@@ -207,6 +207,23 @@ inline float autoExposure(float sunElevation) {
     return float(std::exp(std::log(A::exposureMax) * t));
 }
 
+// How far the sun may move (radians) before the procedural sky and its IBL are regenerated, at a sun elevation
+// (radians). Near the horizon the sky changes fast with the sun (at 0.25 degrees a regeneration changed the frame by
+// up to 6/255 on average, a visible pop), so there it's regenerated after 0.015 degrees: every frame for a sun moving
+// 0.02 degrees a frame. It rises smoothly to 0.25 degrees by 20 degrees up and by 14 degrees down (deep twilight and
+// night barely change), so the switch between the two never shows as a step of its own.
+inline float skyRegenerateAngle(float sunElevation) {
+    constexpr double fine = 0.015, coarse = 0.25;   // degrees
+    const double deg = double(sunElevation) * 180.0 / 3.14159265358979323846;
+    auto smooth = [](double edge0, double edge1, double x) {
+        double t = std::clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
+    };
+    // 0 from -6 to 2 degrees (the sunset and twilight glow), 1 from 20 degrees up and from 14 degrees down.
+    const double t = deg >= 2.0 ? smooth(2.0, 20.0, deg) : smooth(-6.0, -14.0, deg);
+    return float((fine + (coarse - fine) * t) * 3.14159265358979323846 / 180.0);
+}
+
 // ---- Haze ------------------------------------------------------------------------------------------------------
 
 // Extinction per metre that leaves 5% of the light at `visibility` metres (ln 20 / visibility); 0 turns haze off.

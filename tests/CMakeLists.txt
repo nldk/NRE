@@ -26,8 +26,8 @@ if(NRE_UNSAFE_API)
         target_compile_options(nre_visual_test PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type -Wno-missing-field-initializers)
     endif()
 
-    # One test per scenario name registered with NRE_SCENARIO (underscores become dashes). perf-landscape isn't one:
-    # it's run by hand on a Release build.
+    # One test per scenario name registered with NRE_SCENARIO (underscores become dashes). perf-landscape and
+    # perf-landscape-sunset aren't: they're run by hand on a Release build.
     foreach(scenario capture-clear baseline-car baseline-skybox far-object
                      exposure-brighter sky-color function-mode-car skybox-exposure resize-target passthrough-2d
                      alpha-mask double-sided roughness no-uv-mesh demo-car-lit normal-map metallic-texture
@@ -36,7 +36,7 @@ if(NRE_UNSAFE_API)
                      sky-noon sky-sunset sky-night sun-disk sky-follows-sun sky-elevations lit-low-sun
                      scene-switch skybox-landscape landscape-no-sun
                      ambient-sky-blue ambient-sunset-warm ambient-small-default destroy-ibl-source
-                     skybox-landscape-lighting ambient-follows-sun)
+                     skybox-landscape-lighting ambient-follows-sun sky-sunset-smooth)
         add_test(NAME ${scenario} COMMAND nre_visual_test ${scenario})
         set_tests_properties(${scenario} PROPERTIES
             # vk-bootstrap's debug messenger prints "[<severity>: <types>]", e.g. "[ERROR: Validation]" or

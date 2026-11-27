@@ -7,6 +7,7 @@
 #include "core/context.h"
 #include "core/errorHandling.h"
 #include "gpu/upload.h"
+#include "lighting/lightingMath.h"
 #include "pipeline/shader.h"
 #include "scene/scene.h"
 
@@ -122,7 +123,12 @@ namespace NRE {
         const glm::vec3 toSun = length > 0.0f ? -sunDirection / length : glm::vec3(0.0f, -1.0f, 0.0f);
         brightness = std::max(brightness, 0.0f);
         // Without sunlight (brightness 0) only the night floor is left, whichever way the sun points.
-        const bool sunMoved = brightness > 0.0f && angleBetween(toSun, target.toSun) > regenerateAngle;
+        // How far it may move depends on its height: much less near the horizon, where the sky changes fast
+        // (LightingMath::skyRegenerateAngle). The lower threshold of the two suns decides, so a sun entering the fine
+        // band is caught on the way in. Every slot still catches up to the one shared target.
+        const float allowed = std::min(LightingMath::skyRegenerateAngle(std::asin(std::clamp(toSun.y, -1.0f, 1.0f))),
+                                       LightingMath::skyRegenerateAngle(std::asin(std::clamp(target.toSun.y, -1.0f, 1.0f))));
+        const bool sunMoved = brightness > 0.0f && angleBetween(toSun, target.toSun) > allowed;
         if (brightness != target.brightness || sunMoved) target = {brightness > 0.0f ? toSun : target.toSun, brightness};
         if (slots[slot] == target) return false;
         slots[slot] = target;

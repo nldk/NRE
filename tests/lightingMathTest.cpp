@@ -207,6 +207,23 @@ static void hazeVisibility() {
     CHECK(hazeDensityForVisibility(0.0f) == 0.0f);
 }
 
+// R39: fine steps around the horizon, 0.25 degrees high up and deep in the night, continuous in between.
+static void skyRegenerateAngleShape() {
+    auto deg = [](float elevationDeg) { return double(skyRegenerateAngle(glm::radians(elevationDeg))) * 180.0 / 3.14159265358979323846; };
+    CHECK_NEAR(deg(1.0f), 0.015, 1e-6);
+    CHECK_NEAR(deg(-4.0f), 0.015, 1e-6);
+    CHECK_NEAR(deg(30.0f), 0.25, 1e-6);
+    CHECK_NEAR(deg(90.0f), 0.25, 1e-6);
+    CHECK_NEAR(deg(-20.0f), 0.25, 1e-6);
+    CHECK(deg(2.5f) < 0.02);   // a sun moving 0.02 degrees a frame near the horizon regenerates every frame
+    double previous = deg(-90.0f);
+    for (float e = -89.9f; e <= 90.0f; e += 0.1f) {
+        double d = deg(e);
+        CHECK(std::fabs(d - previous) < 0.005);   // no jump in the threshold itself
+        previous = d;
+    }
+}
+
 int main() {
     toneMapRoundTrip();
     inverseToneMapClamps();
@@ -225,5 +242,6 @@ int main() {
     transmittanceMatchesPrototype();
     sunElevationFromDirection();
     hazeVisibility();
+    skyRegenerateAngleShape();
     return g_failed ? 1 : 0;
 }
