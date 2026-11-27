@@ -319,6 +319,44 @@ sun shadows (Task 6) · 4 `samplerCube` irradiance · 5 `samplerCube` prefiltere
 - [ ] **Step 5: Perf check (Release-unsafe):** add scenario `perf-landscape`: `setRenderTarget(2560, 1600)`, Landscape, demo car + ground, sun rotating 0.5°/frame, 600 frames after 60 warm-up; prints mean frame ms. Expected ≤ 6.06 ms (165 fps). If over: amortise (sky + IBL refresh at most every other frame, one face per frame), re-measure, and report the numbers.
 - [ ] **Step 6: Commit** `git commit -m "Add image-based ambient and reflections from the sky"`
 
+### Task 9b: Instance picking and projection access (user request, 2026-11-27)
+
+Not in the original plan or spec: the user asked for it directly mid-run. The exact API is the user's (verbatim):
+
+```cpp
+struct RayHit { Handel<Instance> instance; float distance; glm::vec3 point; };
+// Ray from the camera through a window pixel, tested against the bound scene's visible instances.
+RENDERER_API Result<std::optional<RayHit>> pickInstance(glm::vec2 windowPos);
+RENDERER_API Result<glm::mat4> getProjectionMatrix();   // also lets NSC stop copying the projection for ImGuizmo
+```
+
+The user's app (NSC) uses the unsafe render target inside an ImGui panel and ImGuizmo, and currently copies the projection formula.
+
+**Files:**
+- Create: `src/renderer/scene/picking.{h,cpp}` (ray construction + ray/instance tests)
+- Modify: `include/renderer.h` (`RayHit` next to `Transform`; the two functions near the camera functions; `<optional>` include), `include/renderer_functions.inl` (both functions), `src/renderer/core/renderer.cpp` (public functions), `src/renderer/scene/model.{h,cpp}` (per-mesh local AABB computed once at load if Task 9 didn't already add model bounds — reuse them if it did), `include/renderer_unsafe.h` (one line: with a render target, pass render-target pixel coordinates), tests
+
+**Decisions (controller's, for the implementer):**
+- **Coordinates:** `windowPos` is in the same units as `getMousePosition()` (GLFW window coordinates, top-left origin) when no render target is set; it is converted to scene pixels using the framebuffer/window size ratio (HiDPI). With an unsafe render target set, `windowPos` is in render-target pixels (top-left origin) — the app maps its ImGui panel position to the target; document this on `pickInstance` and in renderer_unsafe.h.
+- **Ray:** from the bound scene's camera position through the pixel, using the same projection and view the renderer draws with (`c->vulkan.projection` — reverse-Z, infinite far, Vulkan Y flip — and `camera.viewMatrix()`); unproject NDC (x, y) at the near plane, direction = normalize(nearPoint − camera position). Must work with the infinite projection (don't unproject at depth 0).
+- **Hit test:** the bound scene's instances that are visible and whose model is alive (same filter as `Scene::draw`), SceneMode or FunctionDrawMode alike (in FunctionDrawMode the scene usually holds no instances → no hit; document). Per instance: transform the ray into model space with the inverse model matrix; test each mesh's local AABB first (skip on miss); then Möller–Trumbore against the mesh triangles; nearest hit wins. Report `distance` in world units along the world-space ray, and `point` in world space. Back faces count as hits (double-sided materials, and picking from inside a model). Degenerate meshes (no indices, zero-area triangles) don't crash or hit.
+- **Return:** `std::nullopt` when nothing is hit; Debug-only misuse checks (no bound scene → the same NoSceneBound error the camera functions give). `Render_2D` mode: picking uses the 2D projection the renderer uses (orthographic) — make it correct or document it as 3D-only with a Debug error; your call, documented.
+- **`getProjectionMatrix()`:** returns `c->vulkan.projection` (the one the scene is drawn with, recomputed on resize/render-target change). Document its conventions explicitly in renderer.h: Vulkan clip space (Y flipped: +Y down), reverse-Z with an infinite far plane (depth 1 at the near plane → 0 at infinity), so code expecting OpenGL conventions (e.g. ImGuizmo) must flip Y back (`proj[1][1] *= -1`) and must not rely on a far plane.
+- No config structs. Every new public function mirrored in `renderer_functions.inl` (no default arguments there).
+
+**Tests (visual-test harness, `tests/visual/visualTest.cpp`; add each name to `tests/CMakeLists.txt`):**
+- `pick-hit`: two Box.glb instances side by side; pick at the projected centre of each → the right `instance`, `distance` ≈ |camera − box front face| (±1e-3 relative), `point` on the front face (±1e-3).
+- `pick-miss`: pick at an empty sky pixel → `std::nullopt`.
+- `pick-nearest`: two boxes in line, near one hides the far one → the near one.
+- `pick-hidden-and-destroyed`: `setVisibility(near, false)` → the far box; destroyed model's instance → skipped.
+- `pick-render-target`: with `Unsafe::setRenderTarget(320, 240)` (different aspect from the window), picking at the target-pixel centre of a box hits it.
+- `projection-matches`: `getProjectionMatrix() * getViewMatrix()` projects a box's centre to the pixel where the capture shows the box (within 2 px).
+- CPU unit test (in `tests/lightingMathTest.cpp` style or a new `tests/pickingTest.cpp`): ray/triangle (hit, miss, edge, parallel, behind origin) and ray/AABB.
+
+- [ ] Write the tests, see them fail (missing functions).
+- [ ] Implement; all tests (full ctest) pass with no validation errors/warnings.
+- [ ] Commit `git commit -m "Add instance picking and getProjectionMatrix"`.
+
 ### Task 10: Distance haze
 
 **Files:**
