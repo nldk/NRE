@@ -14,6 +14,9 @@
 //         return 1;
 //     }
 //
+// The exception is any call before nreSetRenderConfig: there is no error policy yet, so the renderer assumes
+// Panic and aborts the process. Configure it first.
+//
 // Pointer parameters must not be NULL unless the comment says so. String parameters are UTF-8 and only
 // read during the call.
 //
@@ -73,6 +76,7 @@ typedef enum NreErrorCode {
     NRE_ERROR_SHADER_CREATION_FAILED = 27,
     NRE_ERROR_UNKNOWN = 28,                      // also: a C++ exception inside the renderer
     NRE_ERROR_LIBRARY_LOAD_FAILED = 29,
+    NRE_ERROR_INVALID_ARGUMENT = 30,             // e.g. a negative shadow distance, or picking in Render_2D
     NRE_ERROR_CODE_MAX_ENUM = 0x7FFFFFFF         // keeps the enum 32-bit on every compiler
 } NreErrorCode;
 
@@ -95,6 +99,13 @@ typedef enum NreApiMode {
     NRE_API_MODE_FUNCTION_DRAW = 1,
     NRE_API_MODE_MAX_ENUM = 0x7FFFFFFF
 } NreApiMode;
+
+// A scene's lighting mode (nreSetSceneLighting); see renderer.h's SceneLighting.
+typedef enum NreSceneLighting {
+    NRE_SCENE_LIGHTING_SMALL = 0,       // default: cubemap or sky colour, short sharp shadows, no haze
+    NRE_SCENE_LIGHTING_LANDSCAPE = 1,   // procedural sky from the sun, far cascaded shadows, haze, auto exposure
+    NRE_SCENE_LIGHTING_MAX_ENUM = 0x7FFFFFFF
+} NreSceneLighting;
 
 typedef enum NreRenderErrorPolicy {
     NRE_ERROR_POLICY_IGNORE = 0,
@@ -186,6 +197,14 @@ NRE_DEFINE_HANDLE(NreMaterial)
 NRE_DEFINE_HANDLE(NreCubemap)
 #undef NRE_DEFINE_HANDLE
 
+// What nrePickInstance hit: the instance, the distance from the camera along the ray (world units) and the
+// world-space point.
+typedef struct NreRayHit {
+    NreInstance instance;
+    float distance;
+    NreVec3 point;
+} NreRayHit;
+
 // ---------------------------------------------------------------------------
 // Errors and version
 // ---------------------------------------------------------------------------
@@ -239,6 +258,8 @@ NRE_C_EXPORT NreErrorCode nreTranslateInstance(NreInstance instance, NreVec3 off
 NRE_C_EXPORT NreErrorCode nreRotateInstance(NreInstance instance, float angle, NreVec3 axis);
 NRE_C_EXPORT NreErrorCode nreScaleInstance(NreInstance instance, NreVec3 factor);
 NRE_C_EXPORT NreErrorCode nreSetVisibility(NreInstance instance, bool visible);
+// Whether the instance casts sun shadows (it still receives them). Default true.
+NRE_C_EXPORT NreErrorCode nreSetCastsShadows(NreInstance instance, bool castsShadows);
 // transform may be NULL: the identity transform.
 NRE_C_EXPORT NreErrorCode nreDrawModel(NreModel model, const NreTransform* transform);
 NRE_C_EXPORT NreErrorCode nreDrawInstance(NreInstance instance);
@@ -256,7 +277,8 @@ NRE_C_EXPORT NreErrorCode nreRemoveInstanceFromScene(NreInstance instance);
 // ---------------------------------------------------------------------------
 // Textures and materials. Empty texture handles ({0}) use the default texture.
 // ---------------------------------------------------------------------------
-NRE_C_EXPORT NreErrorCode nreCreateTexture(const char* path, NreTexture* texture);
+// srgb: true for colour images (base colour); false for data maps (normal and metallic-roughness maps).
+NRE_C_EXPORT NreErrorCode nreCreateTexture(const char* path, bool srgb, NreTexture* texture);
 NRE_C_EXPORT NreErrorCode nreDestroyTexture(NreTexture texture);
 NRE_C_EXPORT NreErrorCode nreCreateMaterial(NreTexture baseTexture, NreTexture metallicTexture, NreTexture normalTexture,
                                             NreMaterial* material);
@@ -285,6 +307,23 @@ NRE_C_EXPORT NreErrorCode nreSetSunDirection(NreVec3 direction);
 NRE_C_EXPORT NreErrorCode nreGetSunDirection(NreVec3* direction);
 
 // ---------------------------------------------------------------------------
+// Scene lighting, shadows, haze, exposure and sky colour, on the bound scene. renderer.h's defaults:
+// Small: shadows 20 m, haze off. Landscape: shadows 500 m, haze 8000 m / 300 m. Exposure 1, sky {0.1, 0.3, 0.6}.
+// ---------------------------------------------------------------------------
+// Also resets shadow distance, haze and the sky to the mode's defaults.
+NRE_C_EXPORT NreErrorCode nreSetSceneLighting(NreSceneLighting lighting);
+NRE_C_EXPORT NreErrorCode nreGetSceneLighting(NreSceneLighting* lighting);
+// Metres; 0 turns sun shadows off, negative is NRE_ERROR_INVALID_ARGUMENT.
+NRE_C_EXPORT NreErrorCode nreSetShadowDistance(float meters);
+// visibility: metres at which the haze hides almost everything, 0 = off. height: the haze layer's thickness,
+// greater than 0 (renderer.h's default: 300).
+NRE_C_EXPORT NreErrorCode nreSetHaze(float visibility, float height);
+// Greater than 0; 2 is twice as bright.
+NRE_C_EXPORT NreErrorCode nreSetExposure(float exposure);
+// The background without a skybox (Small), linear 0..1.
+NRE_C_EXPORT NreErrorCode nreSetSkyColor(NreVec3 color);
+
+// ---------------------------------------------------------------------------
 // Cubemaps and the skybox
 // ---------------------------------------------------------------------------
 NRE_C_EXPORT NreErrorCode nreCreateCubemap(const char* right, const char* left, const char* top,
@@ -306,6 +345,11 @@ NRE_C_EXPORT NreErrorCode nreRotateCamera(float yawDelta, float pitchDelta);
 NRE_C_EXPORT NreErrorCode nreCameraLookAt(NreVec3 target);
 NRE_C_EXPORT NreErrorCode nreGetCameraForward(NreVec3* forward);
 NRE_C_EXPORT NreErrorCode nreGetViewMatrix(NreMat4* view);
+// Vulkan conventions: clip-space +Y down, reverse-Z with an infinite far plane. See renderer.h.
+NRE_C_EXPORT NreErrorCode nreGetProjectionMatrix(NreMat4* projection);
+// The nearest visible instance of the bound scene under a pixel (getMousePosition units). Sets *hit; when it's
+// true, *rayHit holds the hit, otherwise *rayHit is zeroed. Render_3D only.
+NRE_C_EXPORT NreErrorCode nrePickInstance(NreVec2 windowPos, bool* hit, NreRayHit* rayHit);
 
 // ---------------------------------------------------------------------------
 // Timing

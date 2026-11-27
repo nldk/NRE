@@ -52,6 +52,7 @@ namespace {
     NRE_CHECK_ERROR(NRE_ERROR_SHADER_CREATION_FAILED, ShaderCreationFailed)
     NRE_CHECK_ERROR(NRE_ERROR_UNKNOWN, UnknownError)
     NRE_CHECK_ERROR(NRE_ERROR_LIBRARY_LOAD_FAILED, LibraryLoadFailed)
+    NRE_CHECK_ERROR(NRE_ERROR_INVALID_ARGUMENT, InvalidArgument)
 #undef NRE_CHECK_ERROR
 
 #define NRE_CHECK_ENUM(c, cpp) static_assert(static_cast<int>(c) == static_cast<int>(cpp), #c " doesn't match " #cpp);
@@ -63,6 +64,8 @@ namespace {
     NRE_CHECK_ENUM(NRE_RENDER_2D, NRE::RenderMode::Render_2D)
     NRE_CHECK_ENUM(NRE_API_MODE_SCENE, NRE::ApiMode::SceneMode)
     NRE_CHECK_ENUM(NRE_API_MODE_FUNCTION_DRAW, NRE::ApiMode::FunctionDrawMode)
+    NRE_CHECK_ENUM(NRE_SCENE_LIGHTING_SMALL, NRE::SceneLighting::Small)
+    NRE_CHECK_ENUM(NRE_SCENE_LIGHTING_LANDSCAPE, NRE::SceneLighting::Landscape)
     NRE_CHECK_ENUM(NRE_ERROR_POLICY_IGNORE, NRE::RenderErrorPolicy::Ignore)
     NRE_CHECK_ENUM(NRE_ERROR_POLICY_RETURN, NRE::RenderErrorPolicy::Return)
     NRE_CHECK_ENUM(NRE_ERROR_POLICY_PANIC, NRE::RenderErrorPolicy::Panic)
@@ -88,6 +91,7 @@ namespace {
     NRE::MouseButton toCpp(NreMouseButton v) { return static_cast<NRE::MouseButton>(v); }
     NRE::CursorMode toCpp(NreCursorMode v) { return static_cast<NRE::CursorMode>(v); }
     NRE::Key toCpp(NreKey v) { return static_cast<NRE::Key>(v); }
+    NRE::SceneLighting toCpp(NreSceneLighting v) { return static_cast<NRE::SceneLighting>(v); }
 
     // ---------------------------------------------------------------------------------------------
     // Math types
@@ -106,6 +110,7 @@ namespace {
     void store(NreVec2* out, glm::vec2 v) { *out = {v.x, v.y}; }
     void store(NreVec3* out, glm::vec3 v) { *out = {v.x, v.y, v.z}; }
     void store(NreMat4* out, const glm::mat4& m) { std::memcpy(out->m, glm::value_ptr(m), sizeof(out->m)); }
+    void store(NreSceneLighting* out, NRE::SceneLighting v) { *out = static_cast<NreSceneLighting>(v); }
     void store(NreTransform* out, const NRE::Transform& t) {
         store(&out->position, t.position);
         out->rotation = {t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w};
@@ -281,6 +286,9 @@ NRE_C_EXPORT NreErrorCode nreDrawModel(NreModel model, const NreTransform* trans
     NRE_C_CALL(NRE::drawModel(toCpp(model), transform ? toCpp(*transform) : NRE::Transform{}));
 }
 NRE_C_EXPORT NreErrorCode nreDrawInstance(NreInstance instance) { NRE_C_CALL(NRE::drawInstance(toCpp(instance))); }
+NRE_C_EXPORT NreErrorCode nreSetCastsShadows(NreInstance instance, bool castsShadows) {
+    NRE_C_CALL(NRE::setCastsShadows(toCpp(instance), castsShadows));
+}
 
 // -------------------------------------------------------------------------------------------------
 // Scenes
@@ -299,8 +307,8 @@ NRE_C_EXPORT NreErrorCode nreRemoveInstanceFromScene(NreInstance instance) {
 // -------------------------------------------------------------------------------------------------
 // Textures and materials
 // -------------------------------------------------------------------------------------------------
-NRE_C_EXPORT NreErrorCode nreCreateTexture(const char* path, NreTexture* texture) {
-    NRE_C_CALL(NRE::createTexture(path), texture);
+NRE_C_EXPORT NreErrorCode nreCreateTexture(const char* path, bool srgb, NreTexture* texture) {
+    NRE_C_CALL(NRE::createTexture(path, srgb), texture);
 }
 NRE_C_EXPORT NreErrorCode nreDestroyTexture(NreTexture texture) { NRE_C_CALL(NRE::destroyTexture(toCpp(texture))); }
 NRE_C_EXPORT NreErrorCode nreCreateMaterial(NreTexture baseTexture, NreTexture metallicTexture, NreTexture normalTexture,
@@ -361,6 +369,20 @@ NRE_C_EXPORT NreErrorCode nreSetSunDirection(NreVec3 direction) { NRE_C_CALL(NRE
 NRE_C_EXPORT NreErrorCode nreGetSunDirection(NreVec3* direction) { NRE_C_CALL(NRE::getSunDirection(), direction); }
 
 // -------------------------------------------------------------------------------------------------
+// Scene lighting, shadows, haze, exposure and sky colour
+// -------------------------------------------------------------------------------------------------
+NRE_C_EXPORT NreErrorCode nreSetSceneLighting(NreSceneLighting lighting) {
+    NRE_C_CALL(NRE::setSceneLighting(toCpp(lighting)));
+}
+NRE_C_EXPORT NreErrorCode nreGetSceneLighting(NreSceneLighting* lighting) {
+    NRE_C_CALL(NRE::getSceneLighting(), lighting);
+}
+NRE_C_EXPORT NreErrorCode nreSetShadowDistance(float meters) { NRE_C_CALL(NRE::setShadowDistance(meters)); }
+NRE_C_EXPORT NreErrorCode nreSetHaze(float visibility, float height) { NRE_C_CALL(NRE::setHaze(visibility, height)); }
+NRE_C_EXPORT NreErrorCode nreSetExposure(float exposure) { NRE_C_CALL(NRE::setExposure(exposure)); }
+NRE_C_EXPORT NreErrorCode nreSetSkyColor(NreVec3 color) { NRE_C_CALL(NRE::setSkyColor(toCpp(color))); }
+
+// -------------------------------------------------------------------------------------------------
 // Cubemaps and the skybox
 // -------------------------------------------------------------------------------------------------
 NRE_C_EXPORT NreErrorCode nreCreateCubemap(const char* right, const char* left, const char* top,
@@ -385,6 +407,24 @@ NRE_C_EXPORT NreErrorCode nreRotateCamera(float yawDelta, float pitchDelta) {
 NRE_C_EXPORT NreErrorCode nreCameraLookAt(NreVec3 target) { NRE_C_CALL(NRE::cameraLookAt(toCpp(target))); }
 NRE_C_EXPORT NreErrorCode nreGetCameraForward(NreVec3* forward) { NRE_C_CALL(NRE::getCameraForward(), forward); }
 NRE_C_EXPORT NreErrorCode nreGetViewMatrix(NreMat4* view) { NRE_C_CALL(NRE::getViewMatrix(), view); }
+NRE_C_EXPORT NreErrorCode nreGetProjectionMatrix(NreMat4* projection) {
+    NRE_C_CALL(NRE::getProjectionMatrix(), projection);
+}
+NRE_C_EXPORT NreErrorCode nrePickInstance(NreVec2 windowPos, bool* hit, NreRayHit* rayHit) {
+    return guard([&] {
+        auto result = NRE::pickInstance({windowPos.x, windowPos.y});
+        if (!result) return fail(result.error());
+        *hit = result->has_value();
+        *rayHit = {};
+        if (*hit) {
+            const NRE::RayHit& h = **result;
+            store(&rayHit->instance, h.instance);
+            rayHit->distance = h.distance;
+            store(&rayHit->point, h.point);
+        }
+        return NRE_OK;
+    });
+}
 
 // -------------------------------------------------------------------------------------------------
 // Timing
