@@ -32,6 +32,17 @@ namespace NRE {
         std::vector<Vertex> vertices;
         std::vector<uint32_t> indices;
         uint32_t material = UINT32_MAX;
+        // The vertices' axis-aligned bounds in model space, set once at load (computeBounds). Used by picking.
+        glm::vec3 boundsMin{0.0f};
+        glm::vec3 boundsMax{0.0f};
+        void computeBounds() {
+            if (vertices.empty()) { boundsMin = boundsMax = glm::vec3(0.0f); return; }
+            boundsMin = boundsMax = vertices[0].position;
+            for (const Vertex& v : vertices) {
+                boundsMin = glm::min(boundsMin, v.position);
+                boundsMax = glm::max(boundsMax, v.position);
+            }
+        }
         Buffer vertexBuffer;
         Buffer indexBuffer;
     };
@@ -46,7 +57,18 @@ namespace NRE {
 
         Model() = default;
 
-        Result<void> draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix);
+        // Pushes the matrices, then per mesh binds its material (set 1) and sets the cull mode (none for
+        // double-sided materials, back faces otherwise) before drawing it. Set 0 must already be bound.
+        // cullMode: the cull mode the command buffer has now. The cull mode is only set where it differs, and
+        // cullMode is updated. Start a pass (or a newly bound pipeline) with unknownCullMode.
+        static constexpr VkCullModeFlags unknownCullMode = VK_CULL_MODE_FLAG_BITS_MAX_ENUM;
+        Result<void> draw(VkCommandBuffer commandBuffer,Pipeline &pipeline, const glm::mat4& modelMatrix, VkCullModeFlags& cullMode);
+        // The shadow pass (lighting/shadows.cpp): pushes the model matrix (offset 0), then per mesh binds depthOnly,
+        // or alphaMasked and the mesh's material (set 1) for alpha-masked materials, and draws it. The two pipelines
+        // must share a layout; set 0, the rest of the push constants and the cull mode are the caller's.
+        // boundPipeline: the pipeline bound now. It's only rebound where it differs, and boundPipeline is updated.
+        void drawDepthOnly(VkCommandBuffer commandBuffer, const Pipeline& depthOnly, const Pipeline& alphaMasked,
+                           const glm::mat4& modelMatrix, VkPipeline& boundPipeline);
         [[nodiscard]] std::vector<Handel<Material>> getMaterials() const{ return materials; };
         Model(const Model&) = delete;
         Model& operator=(const Model&) = delete;
@@ -58,6 +80,7 @@ namespace NRE {
         Handel<Model> model;
         Transform transform;
         bool visible = true;
+        bool castsShadows = true;   // setCastsShadows: whether it's drawn into the sun's shadow maps
         std::vector<Handel<Scene>> scenes;
     };
     Result<Model> loadModel(const std::string& path);

@@ -1,0 +1,43 @@
+#version 450
+// Built into librenderer (Ibl::filter): the diffuse light from the sky. Each texel of the output cubemap holds, for a
+// surface normal N through it, the cosine-weighted average of the sky's radiance over N's hemisphere (the irradiance
+// / pi), so a Lambert surface of albedo a reflects a x this. Integrated exactly over every texel of one small mip of
+// the source (pc.lod, pc.size texels a side), each weighted by its solid angle: no noise, and nothing narrow is missed,
+// since every texel of that mip is an average of the full-resolution sky.
+#include "cubeFaces.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform samplerCube source;                        // linear HDR, with mips
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray irradiance; // 6 faces
+layout(push_constant) uniform PC {
+    float lod;    // the source mip integrated over
+    int   size;   // its texels a side
+} pc;
+
+void main() {
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    int outSize = imageSize(irradiance).x;
+    if (p.x >= outSize || p.y >= outSize) return;
+    vec3 N = texelDirection(p, outSize);
+
+    vec3 sum = vec3(0.0);
+    float weights = 0.0;
+    float texel = 2.0 / float(pc.size);
+    for (int face = 0; face < 6; ++face) {
+        for (int y = 0; y < pc.size; ++y) {
+            for (int x = 0; x < pc.size; ++x) {
+                vec2 st = (vec2(x, y) + 0.5) * texel - 1.0;
+                vec3 d = faceDirection(face, st);
+                float r2 = dot(d, d);   // 1 + s^2 + t^2
+                vec3 dir = d * inversesqrt(r2);
+                float cosine = dot(N, dir);
+                if (cosine <= 0.0) continue;
+                // A texel's solid angle on the unit cube: area / r^2, foreshortened by 1 / r.
+                float w = cosine * texel * texel * inversesqrt(r2 * r2 * r2);
+                sum += textureLod(source, dir, pc.lod).rgb * w;
+                weights += w;
+            }
+        }
+    }
+    imageStore(irradiance, p, vec4(sum / max(weights, 1e-6), 1.0));
+}

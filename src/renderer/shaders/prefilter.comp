@@ -1,0 +1,50 @@
+#version 450
+// Built into librenderer (Ibl::filter): one mip of the prefiltered specular cubemap. Mip m of M holds the sky as a
+// GGX lobe of perceptual roughness m / (M - 1) reflects it, for a view straight along the normal (N = V = R, the
+// split-sum approximation): nreAmbient reads it at lod roughness x (M - 1). GGX importance sampled; each sample
+// reads the source mip whose texels match its share of the lobe (filtered importance sampling, Krivanek and
+// Colbert), so few samples give a smooth result.
+#include "cubeFaces.glsl"
+#include "ggx.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform samplerCube source;                    // linear HDR, with a full mip chain
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray mip;   // this mip, 6 faces
+layout(push_constant) uniform PC {
+    float roughness;     // perceptual
+    int   sampleCount;
+    float sourceSize;    // the source's mip 0, texels a side
+    float sourceMips;    // its mip count
+} pc;
+
+void main() {
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    int size = imageSize(mip).x;
+    if (p.x >= size || p.y >= size) return;
+    vec3 N = texelDirection(p, size);
+
+    if (pc.roughness <= 0.0) {
+        // A mirror: the sky itself, at this mip's resolution.
+        imageStore(mip, p, vec4(textureLod(source, N, log2(pc.sourceSize / float(size))).rgb, 1.0));
+        return;
+    }
+    float a = ggxAlpha(pc.roughness);
+    mat3 frame = tangentFrame(N);
+    float texelSolidAngle = 4.0 * GGX_PI / (6.0 * pc.sourceSize * pc.sourceSize);
+    vec3 sum = vec3(0.0);
+    float weights = 0.0;
+    for (int i = 0; i < pc.sampleCount; ++i) {
+        vec3 H = frame * sampleGGX(hammersley(uint(i), uint(pc.sampleCount)), a);
+        float NdotH = dot(N, H);
+        vec3 L = 2.0 * NdotH * H - N;   // V = N
+        float NdotL = dot(N, L);
+        if (NdotL <= 0.0) continue;
+        // pdf(L) = D * NdotH / (4 VdotH) = D / 4 with V = N. The sample stands for 1 / (count x pdf) steradians.
+        float pdf = ggxDistribution(NdotH, a) * 0.25;
+        float sampleSolidAngle = 1.0 / (float(pc.sampleCount) * pdf + 1e-6);
+        float lod = clamp(0.5 * log2(sampleSolidAngle / texelSolidAngle) + 1.0, 0.0, pc.sourceMips - 1.0);
+        sum += textureLod(source, L, lod).rgb * NdotL;
+        weights += NdotL;
+    }
+    imageStore(mip, p, vec4(sum / max(weights, 1e-6), 1.0));
+}

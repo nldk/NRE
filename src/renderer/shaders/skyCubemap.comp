@@ -1,0 +1,77 @@
+#version 450
+// Built into librenderer (Sky::update): the procedural sky seen from 1.5 m above the ground, into mip 0 of a cubemap,
+// for the sun at pc.toSun. Single scattering (Rayleigh + Mie) times skyScale, the sun's light through the
+// transmittance LUT, plus the night floor; below the horizon a plain ground (the scene's own normally covers it).
+// The finished linear radiance, as sky.frag shows it: the sunlit parts (scattering, the lit ground) times the
+// scattering brightness pc.toSun.w (sun intensity / 3, white sun), plus the night floor, which doesn't depend on the
+// sun's intensity. The sun disk isn't in it (sky.frag draws it). Matches render() in tests/tools/skyPrototype.py,
+// except that the light's optical depth comes from the LUT.
+#include "atmosphere.glsl"
+#include "cubeFaces.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform sampler2D transmittanceLut;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray sky;   // 6 faces, mip 0
+layout(push_constant) uniform PC {
+    vec4 toSun;   // xyz: unit vector toward the sun, w: scattering brightness (sun intensity / 3)
+} pc;
+
+// The sunlit part at the standard intensity (3), without the night floor.
+vec3 sunlitRadiance(vec3 d, vec3 s) {
+    // The view ray from the viewer at (0, viewerRadius, 0): to the top of the atmosphere, or to the ground.
+    float b = ATM_viewerRadius * d.y;
+    float tTop = -b + sqrt(max(b * b - (ATM_viewerQ - ATM_H * ATM_H), 0.0));
+    float discGround = b * b - ATM_viewerQ;
+    bool hitsGround = d.y < 0.0 && discGround >= 0.0;
+    float tMax = hitsGround ? ATM_viewerQ / (-b + sqrt(discGround)) : tTop;   // the near root, without cancelling
+
+    float cosTheta = dot(d, s);
+    float rayleighPhase = 3.0 / (16.0 * ATM_PI) * (1.0 + cosTheta * cosTheta);
+    float g = ATM_mieG;
+    float miePhase = 3.0 / (8.0 * ATM_PI) * ((1.0 - g * g) * (1.0 + cosTheta * cosTheta))
+                   / ((2.0 + g * g) * pow(1.0 + g * g - 2.0 * g * cosTheta, 1.5));
+
+    vec3 radiance = vec3(0.0);
+    vec3 viewDepth = vec3(0.0);
+    for (int i = 0; i < ATM_viewSteps; ++i) {
+        float u0 = float(i) / float(ATM_viewSteps), u1 = float(i + 1) / float(ATM_viewSteps);
+        float um = 0.5 * (u0 + u1);
+        float t = tMax * um * um;
+        float dt = tMax * (u1 * u1 - u0 * u0);
+        float q = ATM_viewerQ + t * (2.0 * b + t);    // r^2 - R^2 at the sample
+        float r = sqrt(q + ATM_planetRadius * ATM_planetRadius);
+        vec3 density = atm_densities(atm_height(q));
+        vec3 extinction = atm_extinction(density);
+        vec3 depthToSample = viewDepth + extinction * (0.5 * dt);
+        float mu = (ATM_viewerRadius * s.y + t * cosTheta) / r;   // the sun's cosine from the sample's up
+        vec3 sunLight = atm_transmittance(transmittanceLut, q, r, mu);
+        vec3 scattering = density.x * ATM_rayleighScatter * rayleighPhase + density.y * ATM_mieScatter * miePhase;
+        radiance += scattering * sunLight * exp(-depthToSample) * dt;
+        viewDepth += extinction * dt;
+    }
+    radiance *= ATM_skyScale;
+
+    if (hitsGround) {
+        // A flat ground of groundAlbedo, lit by the sun and a little sky light, seen through the air in front of it.
+        float mu = (ATM_viewerRadius * s.y + tMax * cosTheta) / ATM_planetRadius;
+        vec3 sunLight = mu > 0.0 ? atm_transmittance(transmittanceLut, 0.0, ATM_planetRadius, mu) : vec3(0.0);
+        vec3 irradiance = sunLight * ATM_standardIntensity * max(mu, 0.0) / ATM_PI + ATM_groundAmbient * max(s.y + 0.15, 0.0);
+        radiance += ATM_groundAlbedo * irradiance * exp(-viewDepth);
+    }
+    return radiance;
+}
+
+// The night floor: the dim sky with no sunlight, the same at any sun intensity (dimmer where the ground is).
+vec3 nightFloor(vec3 d) {
+    return ATM_nightFloor * (atm_viewHitsGround(d) ? ATM_groundNightFloor : 1.0);
+}
+
+void main() {
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    ivec2 size = imageSize(sky).xy;
+    if (p.x >= size.x || p.y >= size.y) return;
+    vec3 d = texelDirection(p, size.x);
+    // No sunlight at all (intensity 0): only the night floor, and the sun's direction doesn't matter.
+    vec3 sunlit = pc.toSun.w > 0.0 ? sunlitRadiance(d, normalize(pc.toSun.xyz)) * pc.toSun.w : vec3(0.0);
+    imageStore(sky, p, vec4(sunlit + nightFloor(d), 1.0));
+}

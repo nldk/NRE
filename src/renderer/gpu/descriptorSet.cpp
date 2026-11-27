@@ -1,5 +1,6 @@
 #include "gpu/descriptorSet.h"
 
+#include <iterator>
 #include <string>
 
 #include "core/context.h"
@@ -12,6 +13,16 @@ namespace NRE {
         constexpr uint32_t maxScenes = 8;
         constexpr uint32_t frameSets = max_frames_in_flight * maxScenes;
         constexpr uint32_t materialSets = 64;
+        // The renderer's own passes, allocated with the material layout: the tone map's HDR input.
+        constexpr uint32_t builtInSets = 1;
+        // Every set with the material layout: 3 textures (base colour, metallic-roughness, normal) + 1 factor UBO.
+        constexpr uint32_t materialLayoutSets = materialSets + builtInSets;
+        constexpr uint32_t texturesPerMaterial = 3;
+        // The built-in compute passes (ComputePipeline::allocateSet): the sky's LUT and cubemap passes and the BRDF
+        // LUT's, room to spare. (Each Ibl allocates its passes' sets from its own pool.)
+        // Each set has at most this many storage images and sampled images.
+        constexpr uint32_t computeSets = 16;
+        constexpr uint32_t imagesPerComputeSet = 2;
     }
 
     Result<void> DescriptorSetLayout::createLayout(std::span<const VkDescriptorSetLayoutBinding> bindings) {
@@ -43,13 +54,15 @@ namespace NRE {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
         VkDescriptorPoolSize sizes[] = {
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         frameSets},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         frameSets + materialLayoutSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         frameSets},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialSets + frameSets},   // frame sets: the skybox
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, texturesPerMaterial * materialLayoutSets + 5 * frameSets   // frame sets: sky, shadow map, IBL x 3
+                                                    + imagesPerComputeSet * computeSets},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          imagesPerComputeSet * computeSets},
         };
         VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        pci.maxSets       = frameSets + materialSets;
-        pci.poolSizeCount = 3;
+        pci.maxSets       = frameSets + materialLayoutSets + computeSets;
+        pci.poolSizeCount = uint32_t(std::size(sizes));
         pci.pPoolSizes    = sizes;
         if (VkResult r = vkCreateDescriptorPool(c->vulkan.device, &pci, nullptr, &descriptorSetPool); r != VK_SUCCESS) {
             descriptorSetPool = VK_NULL_HANDLE;
@@ -115,6 +128,22 @@ namespace NRE {
         vkUpdateDescriptorSets(c->vulkan.device, 1, &w, 0, nullptr);
         return {};
     }
+    Result<void> writeStorageImageDescriptor(VkDescriptorSet set, uint32_t binding, VkImageView view) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+
+        VkDescriptorImageInfo ii{VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_GENERAL};
+
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet          = set;
+        w.dstBinding      = binding;
+        w.descriptorCount = 1;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w.pImageInfo      = &ii;
+        vkUpdateDescriptorSets(c->vulkan.device, 1, &w, 0, nullptr);
+        return {};
+    }
+
     Result<void> DescriptorSetPool::destroy() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);

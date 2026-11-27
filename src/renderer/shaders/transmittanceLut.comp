@@ -1,0 +1,33 @@
+#version 450
+// Built into librenderer (Sky::create, once): the transmittance from any height toward the top of the atmosphere,
+// per direction, for skyCubemap.comp. Same integration as LightingMath::sunTransmittance (64 midpoint steps with
+// quadratic spacing). Parameterised as in atm_lutCoords.
+#include "atmosphere.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D lut;
+
+void main() {
+    ivec2 size = imageSize(lut);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= size.x || p.y >= size.y) return;
+    vec2 x = vec2(p) / vec2(size - 1);
+
+    // Inverse of atm_lutCoords.
+    float rho = ATM_H * x.y;
+    float q = rho * rho;
+    float r = sqrt(q + ATM_planetRadius * ATM_planetRadius);
+    float dMin = ATM_topRadius - r, dMax = rho + ATM_H;
+    float d = dMin + x.x * (dMax - dMin);
+    float mu = d <= 0.0 ? 1.0 : clamp((ATM_H * ATM_H - q - d * d) / (2.0 * r * d), -1.0, 1.0);
+
+    vec3 depth = vec3(0.0);
+    for (int i = 0; i < ATM_transmittanceSteps; ++i) {
+        float u = (float(i) + 0.5) / float(ATM_transmittanceSteps);
+        float t = d * u * u;
+        float dt = d * 2.0 * u / float(ATM_transmittanceSteps);
+        float qs = q + t * (2.0 * r * mu + t);   // r^2 - R^2 at the sample
+        depth += atm_extinction(atm_densities(atm_height(qs))) * dt;
+    }
+    imageStore(lut, p, vec4(exp(-depth), 1.0));
+}

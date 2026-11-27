@@ -1,6 +1,7 @@
 #ifndef VULKANRENDERER_RENDERER_H
 #define VULKANRENDERER_RENDERER_H
 #include <expected>
+#include <optional>
 #include <ostream>
 #include <renderer_export.h>
 #include <string>
@@ -60,6 +61,16 @@ namespace NRE {
         SceneMode,
         FunctionDrawMode,
     };
+    // A scene's lighting mode (setSceneLighting).
+    enum class SceneLighting {
+        // Default; today's behaviour. Sky: the scene's cubemap, else the sky colour. One sharp shadow map over a short
+        // distance, no haze, exposure is exactly setExposure.
+        Small,
+        // Procedural sky computed from the sun, sky-lit ambient and reflections, cascaded shadows reaching far, haze,
+        // and an automatic exposure that follows the sun's height (setExposure multiplies on top; not with a
+        // skybox, see setSkybox).
+        Landscape,
+    };
     enum class ErrorCode {
         UnsupportedGPU,
         ErrorCreatingVulkanInstance,
@@ -91,6 +102,7 @@ namespace NRE {
         UnknownError,
         // Added after 0.1.0: new codes go at the end so the existing values don't change.
         LibraryLoadFailed,
+        InvalidArgument,
     };
     struct WindowConfig {
         int width,height;
@@ -143,6 +155,7 @@ namespace NRE {
             case ErrorCode::DescriptorCreationFailed: return "DescriptorCreationFailed";
             case ErrorCode::ShaderCreationFailed: return "ShaderCreationFailed";
             case ErrorCode::LibraryLoadFailed: return "LibraryLoadFailed";
+            case ErrorCode::InvalidArgument: return "InvalidArgument";
         }
         return "UnknownError. Not in enum.";
     }
@@ -176,10 +189,18 @@ namespace NRE {
         }
     };
 
+    struct Instance;
+    // Where pickInstance() hit: the instance, the distance from the camera along the ray (world units) and the
+    // world-space point.
+    struct RayHit {
+        Handel<Instance> instance;
+        float distance;
+        glm::vec3 point;
+    };
+
     struct Shader;
     class Pipeline;
     struct Model;
-    struct Instance;
     struct Light;
     class Scene;
     class Texture;
@@ -202,6 +223,9 @@ namespace NRE {
     RENDERER_API Result<void> pollEvents();
     RENDERER_API Result<Handel<Shader>> createShader(std::string shaderPath,ShaderType type);
     RENDERER_API Result<void> destroyShader(Handel<Shader> shader);
+    // Shaders for it: vertex shaders #include "nre/frame.glsl" (nreFrame.viewProj, ...), fragment shaders
+    // #include "nre/lighting.glsl" and call nreMaterialSurface + nreShade (see example/shaders). nre_compile_shaders()
+    // puts the includes on the path. Back faces are culled unless the mesh's material is double-sided.
     RENDERER_API Result<Handel<Pipeline>> createPipeline(Handel<Shader> vertexShader,Handel<Shader> fragmentShader);
     RENDERER_API Result<void> destroyPipeline(Handel<Pipeline> pipeline);
     RENDERER_API Result<void> bindPipeline(Handel<Pipeline> pipeline);
@@ -237,17 +261,21 @@ namespace NRE {
 
     // Textures and materials. Models loaded from glTF make their own; these are for adding or swapping them yourself.
     // Materials belong to the model, so changing one changes every instance of that model.
-    // Loads an image file (PNG, JPEG, ...) as a color (sRGB) texture.
-    RENDERER_API Result<Handel<Texture>> createTexture(std::string path);
+    // Loads an image file (PNG, JPEG, ...). srgb = true for colour images (base colour), decoded from sRGB when sampled.
+    // Data maps hold plain numbers and need srgb = false: normal maps and metallic-roughness maps.
+    RENDERER_API Result<Handel<Texture>> createTexture(std::string path, bool srgb = true);
     // Give the materials that use this texture another one first: they keep pointing at it.
     RENDERER_API Result<void> destroyTexture(Handel<Texture> texture);
-    // An empty baseTexture uses the default texture. metallicTexture and normalTexture are stored but not used yet.
+    // Textures as glTF uses them: baseTexture is the colour (sRGB), metallicTexture holds roughness in green and
+    // metallic in blue, normalTexture is a tangent-space normal map (+Y up); load both of those with srgb = false.
+    // An empty baseTexture is white, an empty normalTexture flat. Without a metallicTexture the material isn't
+    // metal and has roughness 1; with one, the texture's values are used as they are.
     RENDERER_API Result<Handel<Material>> createMaterial(Handel<Texture> baseTexture = {},
                                                          Handel<Texture> metallicTexture = {},
                                                          Handel<Texture> normalTexture = {});
-    // Models still using it fall back to the default material.
+    // Models still using it fall back to the default material (white). Waits for the GPU to finish the frames in flight.
     RENDERER_API Result<void> destroyMaterial(Handel<Material> material);
-    // An empty texture uses the default texture. Waits for the GPU to finish the frames in flight, so don't call it every frame.
+    // An empty texture means white. Waits for the GPU to finish the frames in flight, so don't call it every frame.
     RENDERER_API Result<void> setMaterialBaseTexture(Handel<Material> material, Handel<Texture> texture);
     // The model's material slots, in the file's material order. Empty for a model without materials (like OBJ).
     RENDERER_API Result<std::vector<Handel<Material>>> getModelMaterials(Handel<Model> model);
@@ -273,22 +301,57 @@ namespace NRE {
     RENDERER_API Result<void> setLightColor(Handel<Light> light, glm::vec3 color, float intensity);
 
     // The sun: one directional light per scene, kept apart from the scene's other lights so it can drive the
-    // sky and (later) shadows. Same direction and intensity conventions as createDirectionalLight.
-    // A scene starts without one (intensity 0). Shaders read it from the Frame block:
-    //
-    //     layout(set = 0, binding = 0) uniform Frame {
-    //         mat4 viewProj;
-    //         vec4 cameraPos;
-    //         uint lightCount;
-    //         vec4 sunDirection;   // xyz: the way the light travels, normalized
-    //         vec4 sunColor;       // rgb: color, w: intensity (0: no sun)
-    //     } frame;
-    //
-    // Shaders that stop at lightCount still work.
+    // sky and shadows. Same direction and intensity conventions as createDirectionalLight.
+    // A scene starts without one (intensity 0). nreShade lights with it; shaders can also read nreFrame.sunDirection
+    // (the way the light travels), nreFrame.sunColor (rgb colour, w intensity) and nreFrame.sunRadiance (the light
+    // that reaches objects) from nre/frame.glsl. In Landscape the sun also makes the sky: its light is tinted by the
+    // atmosphere (warm and dim near the horizon, gone once it has set), and the intensity scales the sunlit sky's
+    // brightness with it (3, the default, is the standard look). A Landscape scene without a sun (intensity 0, how
+    // scenes start) shows night: the dim blue night sky, night exposure, no sun light or shadows.
     RENDERER_API Result<void> setSun(glm::vec3 direction, glm::vec3 color = glm::vec3(1.0f), float intensity = 3.0f);
     // Keeps the color and intensity, e.g. for a day/night cycle.
     RENDERER_API Result<void> setSunDirection(glm::vec3 direction);
     RENDERER_API Result<glm::vec3> getSunDirection();
+    // Switches the bound scene's mode and resets shadow distance, haze and the sky to that mode's defaults:
+    //   Small:     shadows 20 m, haze off,                    sky = cubemap if set, else the sky colour
+    //   Landscape: shadows 500 m, haze visibility 8000 m,     sky = procedural (or the cubemap if set)
+    // The sun, lights, exposure and sky colour are kept. Landscape's sky comes from the sun: without one (setSun not
+    // called, or intensity 0) the scene shows night. Objects are lit by whichever sky shows (ambient and reflections,
+    // in both modes); Small's sky colour lights them as a plain sky/ground hemisphere. The automatic exposure only
+    // comes with the procedural sky: a Landscape scene with a skybox is exposed at setExposure alone, as in Small.
+    RENDERER_API Result<void> setSceneLighting(SceneLighting lighting);
+    RENDERER_API Result<SceneLighting> getSceneLighting();
+    // How far from the camera the bound scene's sun casts shadows, in metres. 0 turns sun shadows off; must not be
+    // negative. Default 20 m (Small) / 500 m (Landscape); setSceneLighting resets it. The number of cascades follows
+    // from it (up to 4); shorter distances give sharper shadows. Only the sun casts shadows, and only in Render_3D.
+    RENDERER_API Result<void> setShadowDistance(float meters);
+    // Whether an instance casts sun shadows (it still receives them). Default true; e.g. off for grass, for speed.
+    // drawModel() always casts.
+    RENDERER_API Result<void> setCastsShadows(Handel<Instance> instance, bool castsShadows);
+
+    // Distance haze (aerial perspective) on the bound scene: far things fade into the sky's colour, brighter, in the
+    // sun's colour, toward the sun. visibility: metres at which the haze hides almost everything (about 95%); 0 turns
+    // it off. height: how thick the haze layer is; it thins out above that height (metres above y = 0), so mountain
+    // tops poke out of valley haze. Must not be negative (visibility) / must be greater than 0 (height). Default off
+    // (Small) / 8000 m, 300 m (Landscape); setSceneLighting resets it. nreShade applies it (nreApplyHaze in
+    // nre/lighting.glsl, for shaders built from the pieces). The procedural sky gets the same haze near the horizon,
+    // so terrain and sky meet without a seam; a skybox is shown as authored (a photo sky already has its own haze).
+    // With a colour sky or a cubemap sky, hazed objects meet the (exposure-invariant) background exactly only at
+    // exposure 1.
+    RENDERER_API Result<void> setHaze(float visibility, float height = 300.0f);
+
+    // Tone mapping. Shaders write linear light (values above 1 are fine, and must not tone map themselves);
+    // at the end of the frame the renderer multiplies it by the exposure and maps it to the screen with the
+    // ACES curve. Render_2D isn't tone mapped: what the shaders write is what's shown.
+    // The bound scene's exposure: 2 is twice as bright, 0.5 half. Must be greater than 0. Default 1. In Landscape with
+    // the procedural sky it multiplies an automatic exposure that follows the sun's height (1 from 30 degrees up,
+    // rising smoothly to 5 at night), so noon, golden hour and dusk all read well; dusk still comes out darker and
+    // warmer than noon. With a skybox there's no automatic part (see setSkybox).
+    RENDERER_API Result<void> setExposure(float exposure);
+    // The bound scene's background where nothing is drawn and there's no skybox (in Small; Landscape shows the
+    // procedural sky), as the colour it shows on screen (linear 0..1, at any exposure). Default {0.1, 0.3, 0.6}.
+    // A skybox likewise looks like its images at any exposure.
+    RENDERER_API Result<void> setSkyColor(glm::vec3 color);
 
     // Cubemaps and the skybox. A cubemap is six square images of the same size, one per side of a cube around
     // the camera, loaded as color (sRGB). The faces are in the OpenGL order, the one most skybox downloads name
@@ -297,9 +360,15 @@ namespace NRE {
                                                        std::string bottom, std::string front, std::string back);
     // Waits for the GPU to finish the frames in flight. Scenes using it go back to having no skybox.
     RENDERER_API Result<void> destroyCubemap(Handel<Cubemap> cubemap);
-    // The bound scene's sky, drawn behind everything (3D only). An empty handle removes it: the clear color shows again.
-    // Shaders can also sample it, e.g. for reflections: layout(set = 0, binding = 2) uniform samplerCube skybox;
-    // Without a skybox that binding is a black cubemap.
+    // The bound scene's sky, drawn behind everything (3D only), as authored, in either lighting mode. An empty handle
+    // removes it: the mode's own sky shows again (Small: the sky colour; Landscape: the procedural sky).
+    // It also lights the scene: nreAmbient's diffuse light and reflections are filtered from it (expanded from its
+    // display values like the backdrop), the first time a cubemap is made a skybox; that takes a moment and waits
+    // for the GPU, later calls with the same cubemap don't. A photo sky has a fixed, baked look, so it and its light
+    // stay at setExposure in Landscape too (no automatic exposure): at exposure 1 the scene looks as it does in Small.
+    // Shaders can also sample it, e.g. for custom effects: nreSky in nre/frame.glsl (set 0, binding 2), with
+    // nreFrame.skyParams.x telling what it holds: 1 this cubemap (display values), 2 the procedural sky (linear light,
+    // as drawn, without the sun's disk), 0 neither (a black cubemap).
     RENDERER_API Result<void> setSkybox(Handel<Cubemap> cubemap);
 
     // Angles are in radians.
@@ -313,6 +382,20 @@ namespace NRE {
     RENDERER_API Result<void> cameraLookAt(glm::vec3 target);
     RENDERER_API Result<glm::vec3> getCameraForward();
     RENDERER_API Result<glm::mat4> getViewMatrix();
+    // The projection the scene is drawn with (Render_3D), recomputed when the window or the unsafe render target is
+    // resized. It's a Vulkan one, not an OpenGL one: clip space has +Y down (the Y flip is in the matrix), and depth is
+    // reverse-Z with an infinite far plane (1 at the near plane, 0 at infinity). Code written for OpenGL conventions
+    // (e.g. ImGuizmo) has to flip Y back (proj[1][1] *= -1) and must not rely on a far plane. In Render_2D it's the
+    // orthographic projection the 2D scene uses. Errors only when the renderer isn't initialised.
+    RENDERER_API Result<glm::mat4> getProjectionMatrix();
+    // The nearest visible instance under a pixel, or std::nullopt: casts a ray from the bound scene's camera through
+    // the pixel and tests it against the scene's visible instances whose model is alive (back faces count too).
+    // windowPos is in the units of getMousePosition() (window coordinates, top-left origin). With an unsafe render
+    // target set it is in render-target pixels instead (top-left origin): map the panel the target is shown in to
+    // the target's size yourself. distance is along the ray from the camera, in world units; point is in world space.
+    // Render_3D only: in Render_2D it's a Debug-build error (InvalidArgument). In FunctionDrawMode the scene usually
+    // holds no instances, so nothing is hit. Errors when no scene is bound (NoSceneBound).
+    RENDERER_API Result<std::optional<RayHit>> pickInstance(glm::vec2 windowPos);
 
     // Frames per second, averaged over the last half second.
     RENDERER_API Result<float> getFPS();

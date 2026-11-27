@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 # Bump on every release, together with a matching git tag (vX.Y.Z).
 # While 0.x: bump the minor for breaking API/ABI changes, the patch for fixes.
-project(VulkanRenderer VERSION 0.2.0 LANGUAGES CXX)
+project(VulkanRenderer VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -196,12 +196,14 @@ generate_export_header(renderer
 
 target_include_directories(renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer)
 
-# Built-in shaders (the skybox): compiled to SPIR-V as a list of numbers (glslc -mfmt=num) that the
-# renderer #includes into a uint32_t array, so librenderer.so doesn't need any files next to it.
-# Used as #include "embeddedShaders/skybox.vert.inc".
+# Built-in shaders (sky, tone map, shadows and the compute passes): compiled to SPIR-V as a list of numbers
+# (glslc -mfmt=num) that the renderer #includes into a uint32_t array, so librenderer.so doesn't need any files next
+# to it. Used as #include "embeddedShaders/sky.vert.inc". They can #include "nre/frame.glsl" like user shaders, and
+# files under src/renderer too (e.g. "lighting/atmosphere.inc", the constants the C++ side shares with them).
 file(GLOB NRE_BUILTIN_SHADERS CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/shaders/*.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/shaders/*.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/shaders/*.comp
 )
 set(NRE_BUILTIN_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/embeddedShaders)
 set(NRE_BUILTIN_SHADER_OUTPUTS)
@@ -211,7 +213,7 @@ foreach(src ${NRE_BUILTIN_SHADERS})
     add_custom_command(
         OUTPUT  ${inc}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${NRE_BUILTIN_SHADER_DIR}
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O -mfmt=num -MD -MF ${inc}.d -o ${inc} ${src}
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O -mfmt=num -I ${NRE_SHADER_INCLUDE_DIR} -I ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer -MD -MF ${inc}.d -o ${inc} ${src}
         DEPENDS ${src}
         DEPFILE ${inc}.d
         COMMENT "Compiling built-in shader ${name}"
@@ -297,6 +299,8 @@ endif()
 # Demo app and benchmark: skipped automatically when another project fetches NRE.
 # ---------------------------------------------------------------------------
 if(PROJECT_IS_TOP_LEVEL)
+    enable_testing()
+    add_subdirectory(tests)
     add_subdirectory(example)
     add_subdirectory(benchmark)
 endif()

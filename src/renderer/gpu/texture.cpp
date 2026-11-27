@@ -12,7 +12,11 @@
 #include "core/errorHandling.h"
 
 namespace NRE {
-    Result<void> Texture::loadTexture(std::string path) {
+    namespace {
+        VkFormat formatFor(bool srgb) { return srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM; }
+    }
+
+    Result<void> Texture::loadTexture(std::string path, bool srgb) {
         if (!std::filesystem::exists(path)) {
             auto error = Error{ErrorCode::FileNotFound, "Texture file not found: '" + std::filesystem::absolute(path).string() + "'"};
             if (ErrorHandeling::handleError(error)) return std::unexpected(error);
@@ -29,12 +33,12 @@ namespace NRE {
                 }
                 return {};
         }
-        auto upload = uploadPixels(pixels, uint32_t(w), uint32_t(h));
+        auto upload = uploadPixels(pixels, uint32_t(w), uint32_t(h), formatFor(srgb));
         stbi_image_free(pixels);
         return upload;
     }
 
-    Result<void> Texture::loadTextureFromMemory(const unsigned char* data, size_t size) {
+    Result<void> Texture::loadTextureFromMemory(const unsigned char* data, size_t size, bool srgb) {
         int w, h, channels;
         stbi_uc* pixels = stbi_load_from_memory(data, int(size), &w, &h, &channels, STBI_rgb_alpha);
         if (!pixels) {
@@ -45,7 +49,7 @@ namespace NRE {
                 }
                 return {};
         }
-        auto upload = uploadPixels(pixels, uint32_t(w), uint32_t(h));
+        auto upload = uploadPixels(pixels, uint32_t(w), uint32_t(h), formatFor(srgb));
         stbi_image_free(pixels);
         return upload;
     }
@@ -108,23 +112,6 @@ namespace NRE {
         }
         return {};
     }
-    Result<VkDescriptorSet> Texture::createDescriptorSet() {
-        auto c = context();
-        NRE_REQUIRE_CONTEXT(c);
-        auto set = c->vulkan.descriptorPool.allocateDescriptorSet(c->vulkan.descriptorLayouts[1]);   // the material layout
-        if (!set) return set;
-        auto err = writeImageDescriptor(*set,0,image.getView(),c->vulkan.sampler);
-        if (!err) return std::unexpected(err.error());
-        return {set.value()};
-    }
-    Result<void> Texture::createTexture(std::string path) {
-        auto c = context();
-        NRE_REQUIRE_CONTEXT(c);
-        auto err = loadTexture(path);
-        if (!err) return err;
-        return {};
-    }
-
     Result<void> Texture::destroySampler() {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);

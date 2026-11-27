@@ -1,0 +1,1701 @@
+// Offscreen visual tests: each scenario renders one frame into the render target and checks the pixels.
+// Run through ctest (one test per scenario) or directly: nre_visual_test <scenario> [--update-golden].
+#include "capture.h"
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+
+#include "renderer.h"
+#include "renderer_unsafe.h"
+
+#include <vulkan/vulkan.h>
+
+using namespace NRE;
+using namespace NreTest;
+
+#define CHECK(cond) \
+    do { if (!(cond)) { std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); return false; } } while (0)
+
+// Unwraps a Result; on an error prints the renderer's message and ends the process (a scenario can't go on).
+#define TRY(expr) unwrap((expr), __FILE__, __LINE__)
+
+namespace {
+    template <class T>
+    decltype(auto) unwrap(Result<T>&& r, const char* file, int line) {
+        if (!r) {
+            std::cerr << file << ":" << line << ": " << r.error() << "\n";
+            std::exit(1);
+        }
+        if constexpr (!std::is_void_v<T>) return std::move(*r);
+    }
+
+    constexpr uint32_t kWidth = 640, kHeight = 480;
+    constexpr float kGoldenTolerance = 3.0f / 255.0f;
+    constexpr float kGoldenMaxFraction = 0.005f;
+
+    // init() .. shutdown() around a scenario, with the 640x480 render target set.
+    struct Session {
+        explicit Session(ApiMode mode, RenderMode renderMode = RenderMode::Render_3D) {
+            TRY(setRenderConfig({renderMode, mode, RenderErrorPolicy::Return, true,
+                                 {int(kWidth), int(kHeight), "nre_visual_test", false, false}}));
+            TRY(init());
+            TRY(Unsafe::setRenderTarget(kWidth, kHeight));
+            // FunctionDrawMode already made a scene in init().
+            if (mode == ApiMode::SceneMode) TRY(createScene());
+        }
+        ~Session() { (void)shutdown(); }
+        Session(const Session&) = delete;
+        Session& operator=(const Session&) = delete;
+    };
+
+    float srgbEncode(float c) {
+        return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+    }
+
+    std::string outDir() {
+        const char* env = std::getenv("NRE_TEST_OUT");
+        return env ? env : "out";
+    }
+
+    // Writes the golden with --update-golden, otherwise compares against it (saving the capture to NRE_TEST_OUT on a miss).
+    bool matchesGolden(const Image& image, const std::string& file) {
+        CHECK(!image.pixels.empty());
+        std::string golden = std::string(GOLDEN_DIR) + "/" + file;
+        if (updatingGolden()) {
+            savePng(image, golden);
+            std::printf("wrote %s\n", golden.c_str());
+            return true;
+        }
+        Image expected = loadPng(golden);
+        if (expected.pixels.empty()) {
+            std::fprintf(stderr, "missing golden %s (run with --update-golden)\n", golden.c_str());
+            savePng(image, outDir() + "/" + file);
+            return false;
+        }
+        float fraction = fractionDifferent(image, expected, kGoldenTolerance);
+        if (fraction > kGoldenMaxFraction) {
+            std::string actual = outDir() + "/" + file;
+            savePng(image, actual);
+            std::fprintf(stderr, "%s differs from golden on %.2f%% of pixels, capture saved to %s\n",
+                         file.c_str(), fraction * 100.0f, actual.c_str());
+            return false;
+        }
+        return true;
+    }
+
+    bool near(glm::vec3 a, glm::vec3 b, float tolerance) {
+        return glm::all(glm::lessThanEqual(glm::abs(a - b), glm::vec3(tolerance)));
+    }
+
+    float brightness(glm::vec3 c) { return c.x + c.y + c.z; }
+
+    // The police car 3 units ahead of a camera at the origin. SceneMode adds it to the scene; FunctionDrawMode
+    // gets the instance back to draw itself.
+    Handel<Instance> setUpCar(bool addToScene) {
+        auto model = TRY(createModel(ASSET_DIR "/police.glb"));
+        auto car = TRY(createInstance(model));
+        if (addToScene) TRY(addInstanceToScene(car));
+        TRY(translateInstance(car, glm::vec3(0.0f, 0.0f, -3.0f)));
+        TRY(setCameraPosition(glm::vec3(0.0f)));
+        TRY(setCameraRotation(0.0f, 0.0f));
+        return car;
+    }
+
+    void setUpClearDaySkybox() {
+        std::string dir = ASSET_DIR "/skyboxes/clear_day/";
+        auto sky = TRY(createCubemap(dir + "right.png", dir + "left.png", dir + "top.png",
+                                     dir + "bottom.png", dir + "front.png", dir + "back.png"));
+        TRY(setSkybox(sky));
+        TRY(setCameraPosition(glm::vec3(0.0f)));
+        TRY(setCameraRotation(0.0f, 0.0f));
+    }
+
+    // The demo's sun, from above and slightly in front of a camera looking down -Z.
+    void setUpSun() {
+        TRY(setSun(glm::vec3(-0.4f, -1.0f, -0.3f), glm::vec3(1.0f), 3.0f));
+    }
+
+    // A model at position, seen from a camera at the origin looking down -Z. 3 m away, 1 m is about 139 px.
+    Handel<Instance> placeModel(const std::string& path, glm::vec3 position) {
+        auto model = TRY(createModel(path));
+        auto instance = TRY(createInstance(model));
+        TRY(addInstanceToScene(instance));
+        TRY(translateInstance(instance, position));
+        TRY(setCameraPosition(glm::vec3(0.0f)));
+        TRY(setCameraRotation(0.0f, 0.0f));
+        return instance;
+    }
+
+    float luminance(glm::vec3 c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; }
+
+    // Largest luminance over x0..x1, y0..y1 (ends exclusive).
+    float maxLuminance(const Image& image, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+        float best = 0.0f;
+        for (uint32_t y = y0; y < y1; ++y)
+            for (uint32_t x = x0; x < x1; ++x) best = std::max(best, luminance(image.at(x, y)));
+        return best;
+    }
+
+    void bindExamplePipeline(const char* vertexFile, const char* fragmentFile) {
+        auto vertex = TRY(createShader(std::string(SHADER_DIR) + "/" + vertexFile, ShaderType::VERTEX_SHADER));
+        auto fragment = TRY(createShader(std::string(SHADER_DIR) + "/" + fragmentFile, ShaderType::FRAGMENT_SHADER));
+        auto pipeline = TRY(createPipeline(vertex, fragment));
+        TRY(bindPipeline(pipeline));
+    }
+}
+
+// SceneMode, empty scene: every pixel is the clear color {0.1, 0.3, 0.6} (linear), stored as sRGB.
+NRE_SCENARIO(capture_clear) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("flat.vert.spv", "flat.frag.spv");
+    Image image = renderAndCapture();
+    CHECK(image.width == kWidth && image.height == kHeight);
+    glm::vec3 expected{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    for (const glm::vec3& p : image.pixels)
+        CHECK(glm::all(glm::lessThanEqual(glm::abs(p - expected), glm::vec3(2.0f / 255.0f))));
+    return true;
+}
+
+// The police car 3 units ahead of a camera at the origin, lit by the demo shaders and the sun.
+// car.png (the look before materials, without a sun) stays on disk: the ambient is compared against it later.
+NRE_SCENARIO(baseline_car) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpCar(true);
+    setUpSun();
+    return matchesGolden(renderAndCapture(), "car-lit.png");
+}
+
+// Only the sky (clear_day), camera looking down -Z. FunctionDrawMode with no draws.
+NRE_SCENARIO(baseline_skybox) {
+    Session session(ApiMode::FunctionDrawMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpClearDaySkybox();
+    return matchesGolden(renderAndCapture([] {}), "skybox.png");
+}
+
+// Box.glb scaled to 50 m at 5 km: beyond the old 1000 m far plane, so it only shows with the infinite far plane.
+NRE_SCENARIO(far_object) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto box = TRY(createInstance(model));
+    TRY(addInstanceToScene(box));
+    TRY(scaleInstance(box, glm::vec3(50.0f)));
+    TRY(translateInstance(box, glm::vec3(0.0f, 0.0f, -5000.0f)));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    Image image = renderAndCapture();
+    glm::vec3 clear{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    glm::vec3 centre = image.at(kWidth / 2, kHeight / 2);
+    CHECK(glm::max(glm::max(std::abs(centre.x - clear.x), std::abs(centre.y - clear.y)), std::abs(centre.z - clear.z)) > 10.0f / 255.0f);
+    return true;
+}
+
+// Exposure scales the lit car before tone mapping; the clear colour behind it stays the same.
+NRE_SCENARIO(exposure_brighter) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpCar(true);
+    Image a = renderAndCapture();
+    TRY(setExposure(2.0f));
+    Image b = renderAndCapture();
+    CHECK(!a.pixels.empty() && !b.pixels.empty());    // The car covers roughly x 170..470, y 45..240 (see golden/car.png).
+    CHECK(brightness(b.average(190, 60, 450, 190)) > brightness(a.average(190, 60, 450, 190)) * 1.2f);
+    CHECK(near(b.at(10, 400), a.at(10, 400), 2.0f / 255.0f));
+#ifndef NDEBUG
+    CHECK(!setExposure(0.0f));    // misuse, reported in Debug
+    CHECK(!setExposure(-1.0f));
+#endif
+    return true;
+}
+
+// The background shows the sky colour as given, at any exposure.
+NRE_SCENARIO(sky_color) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("flat.vert.spv", "flat.frag.spv");
+    TRY(setSkyColor({0.8f, 0.2f, 0.1f}));
+    glm::vec3 expected{srgbEncode(0.8f), srgbEncode(0.2f), srgbEncode(0.1f)};
+    for (float exposure : {1.0f, 0.25f, 4.0f}) {
+        TRY(setExposure(exposure));
+        Image image = renderAndCapture();
+        CHECK(image.width == kWidth && image.height == kHeight);
+        for (const glm::vec3& p : image.pixels) CHECK(near(p, expected, 2.0f / 255.0f));
+    }
+    return true;
+}
+
+// A metallic, roughness 0 sphere: its highlights are far above the half-float range (a grazing sun at the lobe's
+// peak, or a point light a few centimetres from the surface). They must stay bright, not NaN -> black.
+NRE_SCENARIO(smooth_metal_highlight) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSkyColor(glm::vec3(0.02f)));
+    TRY(setSun(glm::vec3(-1.0f, 0.0f, -0.2f), glm::vec3(1.0f), 3.0f));
+    placeModel(TEST_ASSET_DIR "/chromeSphere.gltf", glm::vec3(0.0f, 0.0f, -1.2f));
+    // The sphere's front is at z = -0.7: the light is 2 cm in front of it, straight ahead of the camera.
+    Handel<Light> lamp = TRY(createPointLight(glm::vec3(0.0f, 0.0f, -0.68f), glm::vec3(1.0f), 10.0f));
+    TRY(addLightToScene(lamp));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    savePng(image, outDir() + "/smooth-metal-highlight.png");
+    CHECK(maxLuminance(image, 0, 0, kWidth, kHeight) > 0.9f);
+    // The middle of the highlight, round the pixel under the light: bright everywhere, with no NaN.
+    for (uint32_t y = kHeight / 2 - 2; y <= kHeight / 2 + 2; ++y) {
+        for (uint32_t x = kWidth / 2 - 2; x <= kWidth / 2 + 2; ++x) {
+            glm::vec3 p = image.at(x, y);
+            CHECK(!glm::any(glm::isnan(p)));
+            CHECK(luminance(p) > 0.9f);
+        }
+    }
+    return true;
+}
+
+// A tiny exposure scales the colour sky far past the half-float range: the background must stay the sky colour,
+// not NaN -> black.
+NRE_SCENARIO(tiny_exposure_background) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("flat.vert.spv", "flat.frag.spv");
+    TRY(setSkyColor({0.8f, 0.2f, 0.1f}));
+    TRY(setExposure(1e-5f));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    for (const glm::vec3& p : image.pixels) CHECK(!glm::any(glm::isnan(p)) && luminance(p) > 0.3f);
+    return true;
+}
+
+// baseline-car through drawInstance: the queued draws give the same frame.
+NRE_SCENARIO(function_mode_car) {
+    Session session(ApiMode::FunctionDrawMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    Handel<Instance> car = setUpCar(false);
+    setUpSun();
+    return matchesGolden(renderAndCapture([car] { TRY(drawInstance(car)); }), "car-lit.png");
+}
+
+// An LDR cubemap sky looks the same at any exposure.
+NRE_SCENARIO(skybox_exposure) {
+    Session session(ApiMode::FunctionDrawMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpClearDaySkybox();
+    TRY(setExposure(2.0f));
+    return matchesGolden(renderAndCapture([] {}), "skybox.png");
+}
+
+// The HDR target follows the render target's size, smaller and larger than the window.
+NRE_SCENARIO(resize_target) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpCar(true);
+    glm::vec3 clear{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    for (VkExtent2D size : {VkExtent2D{kWidth, kHeight}, VkExtent2D{320, 240}, VkExtent2D{800, 600}}) {
+        TRY(Unsafe::setRenderTarget(size.width, size.height));
+        Image image = renderAndCapture();
+        CHECK(image.width == size.width && image.height == size.height);
+        CHECK(near(image.at(2, size.height - 3), clear, 2.0f / 255.0f));                  // background
+        CHECK(!near(image.at(size.width / 2, size.height / 4), clear, 10.0f / 255.0f));   // the car
+    }
+    return true;
+}
+
+// Render_2D isn't tone mapped: an unlit magenta box stays exactly magenta.
+NRE_SCENARIO(passthrough_2d) {
+    Session session(ApiMode::SceneMode, RenderMode::Render_2D);
+    bindExamplePipeline("flat.vert.spv", "flat.frag.spv");
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto box = TRY(createInstance(model));
+    TRY(addInstanceToScene(box));
+    TRY(scaleInstance(box, glm::vec3(200.0f)));
+    TRY(translateInstance(box, glm::vec3(kWidth / 2.0f, kHeight / 2.0f, 0.0f)));
+    Image image = renderAndCapture();    CHECK(!image.pixels.empty());
+    CHECK(near(image.at(kWidth / 2, kHeight / 2), glm::vec3(1.0f, 0.0f, 1.0f), 2.0f / 255.0f));
+    return true;
+}
+
+// An alpha-masked quad facing the camera: the transparent cells of its checker show the sky colour.
+NRE_SCENARIO(alpha_mask) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpSun();
+    placeModel(TEST_ASSET_DIR "/alphaQuad.gltf", glm::vec3(0.0f, 0.0f, -3.0f));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    // The 2 m quad covers about x 181..459, y 101..379, in 4x4 cells of ~70 px. The top-left cell is opaque, the
+    // one to its right a hole.
+    glm::vec3 sky{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    CHECK(near(image.at(285, 136), sky, 2.0f / 255.0f));
+    CHECK(!near(image.at(216, 136), sky, 10.0f / 255.0f));
+    return true;
+}
+
+// The double-sided quad seen from behind: its back face is drawn (not culled), lit from the camera's side.
+NRE_SCENARIO(double_sided) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSun(glm::vec3(0.3f, -0.5f, 1.0f), glm::vec3(1.0f), 3.0f));
+    placeModel(TEST_ASSET_DIR "/alphaQuad.gltf", glm::vec3(0.0f, 0.0f, -3.0f));
+    TRY(setCameraPosition(glm::vec3(0.0f, 0.0f, -6.0f)));
+    TRY(cameraLookAt(glm::vec3(0.0f, 0.0f, -3.0f)));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    // Mirrored: the front's opaque top-left cell is now at the top right, with a hole to its left.
+    glm::vec3 sky{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    CHECK(!near(image.at(424, 136), sky, 10.0f / 255.0f));
+    CHECK(near(image.at(355, 136), sky, 2.0f / 255.0f));
+    return true;
+}
+
+// Two white spheres, roughness 0.1 (left) and 0.9 (right): the smooth one has a much brighter highlight.
+// A dark sky and a low exposure keep the rough one well below the top of the tone curve.
+NRE_SCENARIO(roughness) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSun(glm::vec3(-0.3f, -0.5f, -1.0f), glm::vec3(1.0f), 3.0f));
+    TRY(setSkyColor(glm::vec3(0.02f)));
+    TRY(setExposure(0.1f));
+    placeModel(TEST_ASSET_DIR "/materialSpheres.gltf", glm::vec3(0.0f, 0.0f, -3.0f));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    float smooth = maxLuminance(image, 0, 0, kWidth / 2, kHeight);
+    float rough = maxLuminance(image, kWidth / 2, 0, kWidth, kHeight);
+    std::printf("max luminance: smooth %.3f, rough %.3f\n", smooth, rough);
+    CHECK(smooth > rough * 1.5f);
+    return true;
+}
+
+// An OBJ cube without UVs or normals: the derivative-based normal must not give NaN or black pixels.
+NRE_SCENARIO(no_uv_mesh) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpSun();
+    auto cube = placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));
+    TRY(rotateInstance(cube, glm::radians(35.0f), glm::vec3(0.0f, 1.0f, 0.0f)));
+    TRY(rotateInstance(cube, glm::radians(25.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    // The 1 m cube is ~139 px across around the centre; this box is inside it at any rotation.
+    for (uint32_t y = 200; y < 280; ++y) {
+        for (uint32_t x = 280; x < 360; ++x) {
+            glm::vec3 p = image.at(x, y);
+            CHECK(!glm::any(glm::isnan(p)) && !glm::any(glm::isinf(p)));
+            CHECK(glm::all(glm::greaterThan(p, glm::vec3(2.0f / 255.0f))));
+        }
+    }
+    return true;
+}
+
+namespace {
+    // Brightness of quad i (centre ~139 px per metre from the image centre) of a row of 0.5 m quads 0.6 m apart,
+    // n of them, 3 m from the camera (see makeTestModels.py write_quad_row).
+    float quadBrightness(const Image& image, int i, int n) {
+        int cx = int(std::lround(kWidth / 2.0 + (i - (n - 1) / 2.0) * 0.6 * 139.0));
+        return brightness(image.average(uint32_t(cx - 15), kHeight / 2 - 15, uint32_t(cx + 15), kHeight / 2 + 15));
+    }
+}
+
+// Constant normal maps tilted 45 degrees (flat, +X, -X, +Y, -Y left to right). A sun from the right brightens the
+// +X tilt and darkens the -X one; a sun from above does the same for +Y and -Y. A sign error on either tangent axis fails.
+NRE_SCENARIO(normal_map) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSkyColor(glm::vec3(0.02f)));
+    TRY(setExposure(0.25f));
+    placeModel(TEST_ASSET_DIR "/normalQuads.gltf", glm::vec3(0.0f, 0.0f, -3.0f));
+
+    TRY(setSun(glm::vec3(-1.0f, 0.0f, -1.0f), glm::vec3(1.0f), 3.0f));   // toward the sun: +x and +z
+    Image fromRight = renderAndCapture();
+    CHECK(!fromRight.pixels.empty());
+    float flat = quadBrightness(fromRight, 0, 5), plusX = quadBrightness(fromRight, 1, 5), minusX = quadBrightness(fromRight, 2, 5);
+    std::printf("sun from +x: flat %.3f, +X %.3f, -X %.3f\n", flat, plusX, minusX);
+    CHECK(plusX > flat * 1.05f);
+    CHECK(minusX < flat * 0.7f);
+
+    TRY(setSun(glm::vec3(0.0f, -1.0f, -1.0f), glm::vec3(1.0f), 3.0f));   // toward the sun: +y and +z
+    Image fromAbove = renderAndCapture();
+    CHECK(!fromAbove.pixels.empty());
+    flat = quadBrightness(fromAbove, 0, 5);
+    float plusY = quadBrightness(fromAbove, 3, 5), minusY = quadBrightness(fromAbove, 4, 5);
+    std::printf("sun from +y: flat %.3f, +Y %.3f, -Y %.3f\n", flat, plusY, minusY);
+    CHECK(plusY > flat * 1.05f);
+    CHECK(minusY < flat * 0.7f);
+    return true;
+}
+
+// Metallic-roughness textures are read as linear data with metallic in blue: metallic 0.5 from the texture looks
+// like metallic 0.5 from the factor (an sRGB decode would read 0.22, much brighter), and a fully metal texel loses
+// its diffuse light (a rough white metal still reflects the sun, so it is only somewhat darker).
+NRE_SCENARIO(metallic_texture) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSkyColor(glm::vec3(0.02f)));
+    TRY(setExposure(0.5f));
+    TRY(setSun(glm::vec3(-0.3f, -0.5f, -1.0f), glm::vec3(1.0f), 3.0f));
+    placeModel(TEST_ASSET_DIR "/metalQuads.gltf", glm::vec3(0.0f, 0.0f, -3.0f));
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    float fromTexture = quadBrightness(image, 0, 3), fromFactor = quadBrightness(image, 1, 3), metal = quadBrightness(image, 2, 3);
+    std::printf("half metal: texture %.3f, factor %.3f; full metal %.3f\n", fromTexture, fromFactor, metal);
+    CHECK(std::abs(fromTexture - fromFactor) < 3.0f * 3.0f / 255.0f);
+    CHECK(metal < fromFactor * 0.9f);
+    return true;
+}
+
+// The police car with the sun, using its real material factors.
+NRE_SCENARIO(demo_car_lit) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpCar(true);
+    setUpSun();
+    return matchesGolden(renderAndCapture(), "car-lit.png");
+}
+
+namespace {
+    // Where a world point lands in the 640x480 capture: the renderer's camera (60 degree vertical field of view)
+    // with the bound scene's view. Vulkan's framebuffer y points down.
+    glm::vec2 toPixel(glm::vec3 world) {
+        glm::mat4 projection = glm::perspective(glm::radians(60.0f), float(kWidth) / float(kHeight), 0.1f, 100.0f);
+        glm::vec4 clip = projection * TRY(getViewMatrix()) * glm::vec4(world, 1.0f);
+        glm::vec2 ndc = glm::vec2(clip) / clip.w;
+        return {(ndc.x * 0.5f + 0.5f) * float(kWidth), (0.5f - ndc.y * 0.5f) * float(kHeight)};
+    }
+
+    // Luminance of the 7x7 pixels around where a world point lands. -1 if that's not inside the image.
+    float spotLuminance(const Image& image, glm::vec3 world) {
+        glm::vec2 p = toPixel(world);
+        if (p.x < 4.0f || p.y < 4.0f || p.x > float(kWidth) - 5.0f || p.y > float(kHeight) - 5.0f) return -1.0f;
+        uint32_t x = uint32_t(p.x), y = uint32_t(p.y);
+        return luminance(image.average(x - 3, y - 3, x + 4, y + 4));
+    }
+
+    // The shadow scenes: a 20 x 20 m ground (Box.glb flattened, its top at y = 0), a 1 m box standing on it at the
+    // origin, the demo sun (it travels toward -x and -z, so the box's shadow falls on its -x side). The camera looks
+    // at that side from the -x side.
+    struct ShadowScene {
+        Handel<Model> box;
+        Transform ground, caster;
+        Handel<Instance> groundInstance, casterInstance;
+    };
+    ShadowScene setUpShadowScene(bool addToScene, glm::vec3 casterPosition = {0.0f, 0.5f, 0.0f}) {
+        ShadowScene s;
+        s.box = TRY(createModel(ASSET_DIR "/Box.glb"));
+        s.ground.position = {0.0f, -0.05f, 0.0f};
+        s.ground.scale = {20.0f, 0.1f, 20.0f};
+        s.caster.position = casterPosition;
+        s.groundInstance = TRY(createInstance(s.box));
+        TRY(setInstanceTransform(s.groundInstance, s.ground));
+        s.casterInstance = TRY(createInstance(s.box));
+        TRY(setInstanceTransform(s.casterInstance, s.caster));
+        if (addToScene) {
+            TRY(addInstanceToScene(s.groundInstance));
+            TRY(addInstanceToScene(s.casterInstance));
+        }
+        setUpSun();
+        TRY(setCameraPosition({-4.0f, 3.0f, 1.0f}));
+        TRY(cameraLookAt({-0.5f, 0.0f, -0.3f}));
+        return s;
+    }
+    // On the ground beside the box, where the box blocks the sun: the sun ray from here passes through it.
+    constexpr glm::vec3 kShadowedSpot{-0.7f, 0.0f, -0.3f};
+    // Open ground about as far from the camera, at a similar angle.
+    constexpr glm::vec3 kLitSpot{-0.7f, 0.0f, 1.2f};
+
+    // The box's shadow is clearly darker than the open ground.
+    bool hasBoxShadow(const Image& image, const char* label) {
+        CHECK(!image.pixels.empty());
+        float shadowed = spotLuminance(image, kShadowedSpot), lit = spotLuminance(image, kLitSpot);
+        std::printf("%s: shadowed spot %.3f, lit spot %.3f\n", label, shadowed, lit);
+        CHECK(shadowed >= 0.0f && lit > 0.0f);
+        CHECK(shadowed < 0.6f * lit);
+        return true;
+    }
+
+    // No shadow: the spot beside the box looks like the open ground.
+    bool hasNoBoxShadow(const Image& image) {
+        CHECK(!image.pixels.empty());
+        float shadowed = spotLuminance(image, kShadowedSpot), lit = spotLuminance(image, kLitSpot);
+        std::printf("shadowed spot %.3f, lit spot %.3f\n", shadowed, lit);
+        CHECK(shadowed >= 0.0f && lit > 0.0f);
+        CHECK(std::abs(shadowed - lit) <= 0.03f * lit);
+        return true;
+    }
+
+    void saveCapture(const Image& image, const std::string& file) {
+        std::filesystem::create_directories(outDir());
+        savePng(image, outDir() + "/" + file);
+    }
+
+    // Shadows must not darken what the sun reaches (mild acne, a lit side dimmed by the lookup): litSpot in image
+    // is within 3% of the same spot rendered again with sun shadows off. Leaves the shadow distance at 0.
+    bool litMatchesUnshadowed(const Image& image, glm::vec3 litSpot, const std::function<void()>& draws = {}) {
+        CHECK(!image.pixels.empty());
+        TRY(setShadowDistance(0.0f));
+        Image unshadowed = renderAndCapture(draws);
+        CHECK(!unshadowed.pixels.empty());
+        float lit = spotLuminance(image, litSpot), reference = spotLuminance(unshadowed, litSpot);
+        std::printf("lit spot %.4f, same spot without shadows %.4f\n", lit, reference);
+        CHECK(lit > 0.0f && reference > 0.0f);
+        CHECK(std::abs(lit - reference) <= 0.03f * reference);
+        return true;
+    }
+}
+
+// A box on the ground casts the sun's shadow (SceneMode, default shadow distance).
+NRE_SCENARIO(shadow_basic) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpShadowScene(true);
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-basic.png");
+    if (!hasBoxShadow(image, "scene")) return false;
+    return litMatchesUnshadowed(image, kLitSpot);
+}
+
+// The same scene in FunctionDrawMode: queued through drawInstance, then through drawModel.
+NRE_SCENARIO(shadow_function_mode) {
+    Session session(ApiMode::FunctionDrawMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    ShadowScene s = setUpShadowScene(false);
+    Image instances = renderAndCapture([&] {
+        TRY(drawInstance(s.groundInstance));
+        TRY(drawInstance(s.casterInstance));
+    });
+    saveCapture(instances, "shadow-function-mode-instance.png");
+    if (!hasBoxShadow(instances, "drawInstance")) return false;
+    Image models = renderAndCapture([&] {
+        TRY(drawModel(s.box, s.ground));
+        TRY(drawModel(s.box, s.caster));
+    });
+    saveCapture(models, "shadow-function-mode-model.png");
+    return hasBoxShadow(models, "drawModel");
+}
+
+// Shadow distance 0 turns sun shadows off. Negative distances are misuse (reported in Debug).
+NRE_SCENARIO(shadow_off) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpShadowScene(true);
+    TRY(setShadowDistance(0.0f));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-off.png");
+#ifndef NDEBUG
+    CHECK(!setShadowDistance(-1.0f));
+#endif
+    return hasNoBoxShadow(image);
+}
+
+// An instance that doesn't cast shadows leaves the ground lit (it's still drawn).
+NRE_SCENARIO(shadow_no_cast) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    ShadowScene s = setUpShadowScene(true);
+    TRY(setCastsShadows(s.casterInstance, false));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-no-cast.png");
+    return hasNoBoxShadow(image);
+}
+
+// The alpha-masked checker quad held flat 2 m above the ground: its shadow has lit holes where the cut-outs are.
+NRE_SCENARIO(shadow_alpha) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto ground = TRY(createInstance(box));
+    TRY(setInstanceTransform(ground, Transform{{0.0f, -0.05f, 0.0f}, glm::identity<glm::quat>(), {20.0f, 0.1f, 20.0f}}));
+    TRY(addInstanceToScene(ground));
+    // Lying flat: local (x, y, 0) goes to (x, 2, -y), so the quad's top row of cells (opaque, hole, ...) is at z = -0.75.
+    auto quad = placeModel(TEST_ASSET_DIR "/alphaQuad.gltf", glm::vec3(0.0f, 2.0f, 0.0f));
+    TRY(rotateInstance(quad, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+    setUpSun();
+    TRY(setCameraPosition({-1.0f, 3.5f, -5.0f}));
+    TRY(cameraLookAt({-1.2f, 0.0f, -1.4f}));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-alpha.png");
+    CHECK(!image.pixels.empty());
+    // The sun moves a point at height 2 by (-0.8, -2, -0.6) on its way to the ground.
+    const glm::vec3 drop{-0.8f, -2.0f, -0.6f};
+    float opaque = spotLuminance(image, glm::vec3(-0.75f, 2.0f, -0.75f) + drop);   // top-left cell
+    float hole = spotLuminance(image, glm::vec3(-0.25f, 2.0f, -0.75f) + drop);     // the cell to its right
+    float lit = spotLuminance(image, {-1.3f, 0.0f, -2.5f});                         // outside the quad's shadow
+    std::printf("opaque cell's spot %.3f, hole's spot %.3f, open ground %.3f\n", opaque, hole, lit);
+    CHECK(opaque >= 0.0f && hole >= 0.0f && lit > 0.0f);
+    CHECK(opaque < 0.6f * lit);
+    CHECK(hole > 0.8f * lit);
+    return true;
+}
+
+// The sun straight down (the light's up vector has to change): the box, lifted 1 m off the ground, shadows the
+// ground right below it.
+NRE_SCENARIO(shadow_noon) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpShadowScene(true, {0.0f, 1.5f, 0.0f});
+    TRY(setSun(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f), 3.0f));
+    TRY(setCameraPosition({-4.0f, 2.5f, 1.0f}));
+    TRY(cameraLookAt({0.0f, 0.0f, 0.0f}));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-noon.png");
+    CHECK(!image.pixels.empty());
+    float below = spotLuminance(image, {0.0f, 0.0f, 0.0f}), lit = spotLuminance(image, {-1.5f, 0.0f, 1.0f});
+    std::printf("below the box %.3f, open ground %.3f\n", below, lit);
+    CHECK(std::isfinite(below) && std::isfinite(lit));
+    CHECK(below >= 0.0f && lit > 0.0f);
+    CHECK(below < 0.6f * lit);
+    return true;
+}
+
+namespace {
+    // The landscape scenes: a 2 x 2 km ground (Box.glb flattened, its top at y = 0) and boxes standing on it ahead of
+    // the camera (down -z) at 20, 50, 100 and 250 m, 1, 2, 4 and 10 m tall, so every cascade has a shadow in view, and
+    // a sun from the side.
+    // The camera stands 10 m up at the origin and looks a little down, from 14 m ahead of it to the horizon.
+    void setUpLandscapeScene() {
+        auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+        auto ground = TRY(createInstance(box));
+        TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
+        TRY(addInstanceToScene(ground));
+        const struct { float distance, size; } boxes[] = {{20, 1}, {50, 2}, {100, 4}, {250, 10}};
+        for (auto [distance, size] : boxes) {
+            auto caster = TRY(createInstance(box));
+            TRY(setInstanceTransform(caster, Transform{{0.0f, size * 0.5f, -distance}, glm::identity<glm::quat>(), glm::vec3(size)}));
+            TRY(addInstanceToScene(caster));
+        }
+        // From the right and a little behind the camera: the shadows fall to the boxes' left, in view.
+        TRY(setSun(glm::vec3(-1.0f, -0.8f, 0.4f), glm::vec3(1.0f), 3.0f));
+        TRY(setCameraPosition({0.0f, 10.0f, 0.0f}));
+        TRY(cameraLookAt({0.0f, 0.0f, -100.0f}));
+    }
+
+    // Which cascade tint a pixel shows (nreCascadeDebugColor): 0 red, 1 green, 2 blue, 3 yellow, -1 none.
+    int cascadeTint(glm::vec3 c) {
+        const float d = 0.2f;
+        if (c.r > c.g + d && c.r > c.b + d) return 0;
+        if (c.g > c.r + d && c.g > c.b + d) return 1;
+        if (c.b > c.r + d && c.b > c.g + d) return 2;
+        if (c.r > c.b + d && c.g > c.b + d && std::abs(c.r - c.g) < 0.1f) return 3;
+        return -1;
+    }
+
+    // Share of the image's pixels showing each cascade tint.
+    std::array<float, 4> cascadeTintShares(const Image& image) {
+        std::array<float, 4> shares{};
+        for (glm::vec3 c : image.pixels) {
+            if (int t = cascadeTint(c); t >= 0) shares[t] += 1.0f;
+        }
+        for (float& s : shares) s /= float(image.pixels.size());
+        std::printf("cascade tints: red %.4f, green %.4f, blue %.4f, yellow %.4f\n", shares[0], shares[1], shares[2], shares[3]);
+        return shares;
+    }
+}
+
+// Landscape: a 10 m box 300 m away still casts a clear shadow on a 2 km ground.
+NRE_SCENARIO(shadow_far) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto ground = TRY(createInstance(box));
+    TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
+    TRY(addInstanceToScene(ground));
+    auto caster = TRY(createInstance(box));
+    TRY(setInstanceTransform(caster, Transform{{0.0f, 5.0f, -300.0f}, glm::identity<glm::quat>(), glm::vec3(10.0f)}));
+    TRY(addInstanceToScene(caster));
+    // A low sun travelling toward -x: the box's shadow reaches 20 m out from its -x face.
+    TRY(setSun(glm::vec3(-1.0f, -0.5f, 0.0f), glm::vec3(1.0f), 3.0f));
+    // From high up on the +z side, about 300 m from the box: it's in the last cascade.
+    TRY(setCameraPosition({0.0f, 220.0f, -100.0f}));
+    TRY(cameraLookAt({-10.0f, 0.0f, -300.0f}));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-far.png");
+    CHECK(!image.pixels.empty());
+    const glm::vec3 shadowSpot{-15.0f, 0.0f, -300.0f}, litSpot{-15.0f, 0.0f, -270.0f};
+    float shadowed = spotLuminance(image, shadowSpot), lit = spotLuminance(image, litSpot);
+    std::printf("shadow spot %.3f, lit spot %.3f\n", shadowed, lit);
+    CHECK(shadowed >= 0.0f && lit > 0.0f);
+    CHECK(shadowed < 0.7f * lit);
+    return litMatchesUnshadowed(image, litSpot);
+}
+
+// Landscape: moving the camera 1 cm sideways leaves the frame almost unchanged. That catches gross instability (e.g. a
+// cascade whose size or placement jumps when the camera moves), not sub-texel swimming: with 3x3 PCF an unsnapped
+// map shifted by a fraction of a texel changes too few pixels by too little to show here. Texel snapping is guarded
+// by cascadeStable in tests/lightingMathTest.cpp. Also checks the near cascades are sharp.
+NRE_SCENARIO(shadow_stable) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    setUpLandscapeScene();
+    Image a = renderAndCapture();
+    saveCapture(a, "shadow-stable-a.png");
+    TRY(moveCameraRelative({0.01f, 0.0f, 0.0f}));
+    Image b = renderAndCapture();
+    saveCapture(b, "shadow-stable-b.png");
+    CHECK(!a.pixels.empty() && !b.pixels.empty());
+    float changed = fractionDifferent(a, b, 8.0f / 255.0f);
+    std::printf("pixels changed by the 1 cm move: %.4f%%\n", changed * 100.0f);
+    CHECK(changed < 0.01f);
+    // The 1 m box 20 m away still casts a crisp shadow: the near cascades are sharp, not one map stretched to 500 m.
+    float shadowed = spotLuminance(b, {-1.0f, 0.0f, -19.7f}), lit = spotLuminance(b, {2.0f, 0.0f, -19.7f});
+    std::printf("near box: shadow spot %.3f, lit spot %.3f\n", shadowed, lit);
+    CHECK(shadowed >= 0.0f && lit > 0.0f);
+    CHECK(shadowed < 0.6f * lit);
+    // Open ground between the near boxes, in the first cascades.
+    return litMatchesUnshadowed(b, {6.0f, 0.0f, -30.0f});
+}
+
+// Landscape: a long wall's shadow runs from near the camera through every cascade border without a gap or a
+// lighter band where the cascades blend. Without haze: it lowers the contrast with distance by design, which would
+// blur what this measures.
+NRE_SCENARIO(shadow_cascade_borders) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    TRY(setHaze(0.0f));
+    auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto ground = TRY(createInstance(box));
+    TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
+    TRY(addInstanceToScene(ground));
+    // 3 m high, from 10 m to 410 m ahead. The sun from the right lays its shadow along its left side, 3.75 m wide.
+    auto wall = TRY(createInstance(box));
+    TRY(setInstanceTransform(wall, Transform{{0.0f, 1.5f, -210.0f}, glm::identity<glm::quat>(), {0.5f, 3.0f, 400.0f}}));
+    TRY(addInstanceToScene(wall));
+    TRY(setSun(glm::vec3(-1.0f, -0.8f, 0.4f), glm::vec3(1.0f), 3.0f));
+    TRY(setCameraPosition({0.0f, 10.0f, 0.0f}));
+    TRY(cameraLookAt({0.0f, 0.0f, -100.0f}));
+    Image image = renderAndCapture();
+    saveCapture(image, "shadow-cascade-borders.png");
+    CHECK(!image.pixels.empty());
+    // In each blend band and right after each border (the camera looks down -z, so z is about minus the view depth).
+    for (float distance : {29.0f, 33.0f, 64.0f, 70.0f, 131.0f, 141.0f}) {
+        float shadowed = spotLuminance(image, {-2.0f, 0.0f, -distance}), lit = spotLuminance(image, {5.0f, 0.0f, -distance});
+        std::printf("%.0f m: shadow spot %.3f, lit spot %.3f\n", distance, shadowed, lit);
+        CHECK(shadowed >= 0.0f && lit > 0.0f);
+        CHECK(shadowed < 0.6f * lit);
+    }
+    return litMatchesUnshadowed(image, {5.0f, 0.0f, -64.0f});
+}
+
+// setSceneLighting picks the shadow distance: Landscape 500 m (4 cascades in view), then Small 20 m (1). The sun
+// and the sky colour are kept.
+NRE_SCENARIO(scene_lighting_defaults) {
+    Session session(ApiMode::SceneMode);
+    auto vertex = TRY(createShader(std::string(SHADER_DIR) + "/vertex.vert.spv", ShaderType::VERTEX_SHADER));
+    auto fragment = TRY(createShader(std::string(SHADER_DIR) + "/cascadeDebug.frag.spv", ShaderType::FRAGMENT_SHADER));
+    TRY(bindPipeline(TRY(createPipeline(vertex, fragment))));
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Small);
+    setUpLandscapeScene();
+    TRY(setSkyColor(glm::vec3(0.5f)));   // grey, so the sky doesn't count as a tint
+    const glm::vec3 sun = TRY(getSunDirection());
+
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Landscape);
+    Image landscape = renderAndCapture();
+    saveCapture(landscape, "scene-lighting-defaults-landscape.png");
+    CHECK(!landscape.pixels.empty());
+    for (float share : cascadeTintShares(landscape)) CHECK(share > 0.002f);
+
+    TRY(setSceneLighting(SceneLighting::Small));
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Small);
+    Image small = renderAndCapture();
+    saveCapture(small, "scene-lighting-defaults-small.png");
+    CHECK(!small.pixels.empty());
+    auto shares = cascadeTintShares(small);
+    CHECK(shares[0] > 0.002f);
+    CHECK(shares[1] == 0.0f && shares[2] == 0.0f && shares[3] == 0.0f);
+    CHECK(near(TRY(getSunDirection()), sun, 1e-6f));
+    CHECK(near(small.at(kWidth / 2, 2), glm::vec3(srgbEncode(0.5f)), 2.0f / 255.0f));   // the sky colour, kept
+#ifndef NDEBUG
+    CHECK(!setSceneLighting(SceneLighting(7)));
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Small);
+#endif
+    return true;
+}
+
+namespace {
+    // The way the light of a sun at elevationDeg above the horizon travels. The sun stands toward -z (in front of a
+    // camera with yaw 0), turned azimuthDeg toward +x.
+    glm::vec3 sunAt(float elevationDeg, float azimuthDeg = 0.0f) {
+        float e = glm::radians(elevationDeg), a = glm::radians(azimuthDeg);
+        glm::vec3 toSun{std::cos(e) * std::sin(a), std::sin(e), -std::cos(e) * std::cos(a)};
+        return -toSun;
+    }
+
+    // A Landscape scene with nothing in it but the sky: the sun at elevationDeg toward -z, the camera at the origin
+    // looking down -z with pitch 0 (the horizon is the middle row).
+    void setUpSkyScene(float elevationDeg, float azimuthDeg = 0.0f) {
+        bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+        TRY(setSceneLighting(SceneLighting::Landscape));
+        TRY(setSun(sunAt(elevationDeg, azimuthDeg), glm::vec3(1.0f), 3.0f));
+        TRY(setCameraPosition(glm::vec3(0.0f)));
+        TRY(setCameraRotation(0.0f, 0.0f));
+    }
+
+    glm::vec3 imageAverage(const Image& image) { return image.average(0, 0, image.width, image.height); }
+}
+
+// Landscape at noon: a clear blue sky overhead.
+NRE_SCENARIO(sky_noon) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(60.0f);
+    Image image = renderAndCapture();
+    saveCapture(image, "sky-noon.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 top = image.at(kWidth / 2, 0);
+    glm::vec3 horizon = image.average(0, kHeight / 2 - 6, kWidth, kHeight / 2 - 2);
+    std::printf("top centre (%.3f, %.3f, %.3f), above the horizon (%.3f, %.3f, %.3f)\n", top.r, top.g, top.b,
+                horizon.r, horizon.g, horizon.b);
+    CHECK(top.b > top.r && top.b > 0.4f);
+    CHECK(luminance(horizon) > luminance(top) + 0.05f);   // a paler band along the horizon
+    return true;
+}
+
+// The sun 2 degrees up, in front of the camera: the horizon next to it glows red.
+NRE_SCENARIO(sky_sunset) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(2.0f);
+    Image image = renderAndCapture();
+    saveCapture(image, "sky-sunset.png");
+    CHECK(!image.pixels.empty());
+    // Just above the horizon (the middle row), 20 px left of the sun.
+    glm::vec3 horizon = image.average(295, 234, 305, 238);
+    std::printf("horizon beside the sun (%.3f, %.3f, %.3f)\n", horizon.r, horizon.g, horizon.b);
+    CHECK(horizon.r > horizon.b);
+    return true;
+}
+
+// The sun 20 degrees below the horizon: a dim blue night, not black.
+NRE_SCENARIO(sky_night) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(-20.0f);
+    Image image = renderAndCapture();
+    saveCapture(image, "sky-night.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 average = imageAverage(image);
+    std::printf("frame average (%.3f, %.3f, %.3f), luminance %.4f\n", average.r, average.g, average.b, luminance(average));
+    CHECK(luminance(average) > 3.0f / 255.0f && luminance(average) < 0.15f);
+    CHECK(average.b >= average.r);
+    return true;
+}
+
+// Looking straight at the sun 30 degrees up: the disk saturates.
+NRE_SCENARIO(sun_disk) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(30.0f);
+    TRY(cameraLookAt(-sunAt(30.0f)));
+    Image image = renderAndCapture();
+    saveCapture(image, "sun-disk.png");
+    CHECK(!image.pixels.empty());
+    float centre = luminance(image.at(kWidth / 2, kHeight / 2));
+    // The disk is about 4 px across; 10 px off it is sky.
+    float beside = luminance(image.at(kWidth / 2 + 10, kHeight / 2));
+    std::printf("centre luminance %.3f, 10 px beside %.3f\n", centre, beside);
+    CHECK(centre > 0.9f);
+    CHECK(beside < centre);
+    return true;
+}
+
+// The sky follows the sun: after a big move both frames in flight show the new sky (each has its own cubemap), and
+// a move below the regeneration threshold keeps it.
+NRE_SCENARIO(sky_follows_sun) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(60.0f, 90.0f);   // to the right, out of view
+    Image noon = renderAndCapture();
+    Image noon2 = renderAndCapture();
+    TRY(setSunDirection(sunAt(10.0f, 90.0f)));
+    Image low = renderAndCapture();
+    Image low2 = renderAndCapture();
+    Image low3 = renderAndCapture();
+    TRY(setSunDirection(sunAt(10.1f, 90.0f)));
+    Image nudged = renderAndCapture();
+    Image nudged2 = renderAndCapture();
+    saveCapture(noon, "sky-follows-sun-60.png");
+    saveCapture(low, "sky-follows-sun-10.png");
+    CHECK(!noon.pixels.empty() && !noon2.pixels.empty() && !low.pixels.empty() && !low2.pixels.empty());
+    CHECK(!low3.pixels.empty() && !nudged.pixels.empty() && !nudged2.pixels.empty());
+    float moved = fractionDifferent(noon, low, 8.0f / 255.0f);
+    std::printf("changed by the 50 degree move: %.1f%%\n", moved * 100.0f);
+    CHECK(moved > 0.5f);
+    CHECK(fractionDifferent(noon, noon2, 1.0f / 255.0f) == 0.0f);
+    CHECK(fractionDifferent(low, low2, 1.0f / 255.0f) == 0.0f);
+    CHECK(fractionDifferent(low, low3, 1.0f / 255.0f) == 0.0f);
+    // 0.1 degrees, under the threshold 10 degrees up (about 0.11, LightingMath::skyRegenerateAngle): the cubemap isn't
+    // regenerated, only the automatic exposure follows the sun (by about 1%).
+    float nudgedChange = fractionDifferent(low, nudged, 3.0f / 255.0f);
+    std::printf("changed by the 0.1 degree move: %.3f%%\n", nudgedChange * 100.0f);
+    CHECK(nudgedChange < 0.01f);
+    CHECK(fractionDifferent(nudged, nudged2, 1.0f / 255.0f) == 0.0f);
+    return true;
+}
+
+// Through the day, facing the sun: golden hour, the horizon line at sunset, twilight and night. Never black, and the
+// horizon beside the sun gets redder as it sinks.
+NRE_SCENARIO(sky_elevations) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(15.0f);
+    float previousRatio = 0.0f;
+    for (float elevation : {15.0f, 5.0f, 0.0f, -4.0f, -10.0f}) {
+        TRY(setSunDirection(sunAt(elevation)));
+        Image image = renderAndCapture();
+        CHECK(!image.pixels.empty());
+        char file[64];
+        std::snprintf(file, sizeof(file), "sky-elevation-%+.0f.png", elevation);
+        saveCapture(image, file);
+        glm::vec3 sky = image.average(0, 0, kWidth, kHeight / 2);
+        glm::vec3 horizon = image.average(280, 232, 300, 238);
+        float ratio = horizon.r / std::max(horizon.b, 1e-3f);
+        std::printf("%+.0f deg: sky average (%.3f, %.3f, %.3f), horizon beside the sun (%.3f, %.3f, %.3f) r/b %.2f\n",
+                    elevation, sky.r, sky.g, sky.b, horizon.r, horizon.g, horizon.b, ratio);
+        CHECK(luminance(sky) > 3.0f / 255.0f);
+        if (elevation >= 0.0f) {
+            CHECK(ratio > previousRatio);
+            previousRatio = ratio;
+        } else {
+            CHECK(sky.b >= sky.r);   // twilight and night are blue overhead
+        }
+    }
+    return true;
+}
+
+// A white box on white ground in Landscape, the sun behind the camera: its sunlit face stays readable as the sun
+// goes down, and turns warmer.
+NRE_SCENARIO(lit_low_sun) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    auto cube = TRY(createModel(TEST_ASSET_DIR "/noUv.obj"));   // no material: white
+    auto ground = TRY(createInstance(cube));
+    TRY(setInstanceTransform(ground, Transform{{0.0f, -0.05f, 0.0f}, glm::identity<glm::quat>(), {400.0f, 0.1f, 400.0f}}));
+    TRY(addInstanceToScene(ground));
+    auto box = TRY(createInstance(cube));
+    TRY(setInstanceTransform(box, Transform{{0.0f, 0.5f, -3.0f}, glm::identity<glm::quat>(), glm::vec3(1.0f)}));
+    TRY(addInstanceToScene(box));
+    TRY(setCameraPosition({0.0f, 1.0f, 0.0f}));
+    TRY(cameraLookAt({0.0f, 0.5f, -3.0f}));
+    float previousRatio = 0.0f;
+    for (float elevation : {30.0f, 5.0f, 0.5f}) {
+        // Behind the camera, 30 degrees to its right: it lights the box's +z face, the one facing the camera.
+        TRY(setSun(sunAt(elevation, 150.0f), glm::vec3(1.0f), 3.0f));
+        Image image = renderAndCapture();
+        CHECK(!image.pixels.empty());
+        char file[64];
+        std::snprintf(file, sizeof(file), "lit-low-sun-%.1f.png", elevation);
+        saveCapture(image, file);
+        glm::vec2 p = toPixel({0.0f, 0.5f, -2.5f});   // the middle of the lit face
+        glm::vec3 face = image.average(uint32_t(p.x) - 20, uint32_t(p.y) - 20, uint32_t(p.x) + 20, uint32_t(p.y) + 20);
+        float ratio = face.r / std::max(face.b, 1e-3f);
+        std::printf("%.1f deg: lit face (%.3f, %.3f, %.3f), luminance %.3f, r/b %.2f\n", elevation, face.r, face.g, face.b,
+                    luminance(face), ratio);
+        CHECK(luminance(face) > 0.15f);
+        CHECK(ratio > previousRatio);
+        previousRatio = ratio;
+    }
+    return true;
+}
+
+// Two scenes bound in turn, a Landscape one with the procedural sky and a Small one with a red sky colour and a lit
+// box, each with its own exposure: every frame looks like its own scene rendered alone.
+NRE_SCENARIO(scene_switch) {
+    Session session(ApiMode::SceneMode);
+    Handel<Scene> a = TRY(getBoundScene());
+    setUpSkyScene(60.0f, 40.0f);
+    TRY(setExposure(1.5f));
+    Image aloneA = renderAndCapture();
+
+    Handel<Scene> b = TRY(createScene());
+    TRY(bindScene(b));
+    TRY(setSkyColor({0.8f, 0.1f, 0.1f}));
+    TRY(setExposure(0.5f));
+    placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));
+    setUpSun();
+    Image aloneB = renderAndCapture();
+    saveCapture(aloneA, "scene-switch-a.png");
+    saveCapture(aloneB, "scene-switch-b.png");
+    CHECK(!aloneA.pixels.empty() && !aloneB.pixels.empty());
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Small);
+    glm::vec3 red{srgbEncode(0.8f), srgbEncode(0.1f), srgbEncode(0.1f)};
+    CHECK(near(aloneB.at(10, 10), red, 2.0f / 255.0f));
+    CHECK(aloneA.at(kWidth / 2, 0).b > aloneA.at(kWidth / 2, 0).r);
+
+    for (int frame = 0; frame < 4; ++frame) {
+        bool sceneA = frame % 2 == 0;
+        TRY(bindScene(sceneA ? a : b));
+        Image image = renderAndCapture();
+        float differs = fractionDifferent(image, sceneA ? aloneA : aloneB, kGoldenTolerance);
+        std::printf("frame %d (scene %c): %.3f%% differs from the scene alone\n", frame, sceneA ? 'A' : 'B', differs * 100.0f);
+        CHECK(differs <= kGoldenMaxFraction);
+    }
+    // The exposure is the scene's own: lowering A's darkens A.
+    TRY(bindScene(a));
+    CHECK(TRY(getSceneLighting()) == SceneLighting::Landscape);
+    TRY(setExposure(0.5f));
+    Image dimmerA = renderAndCapture();
+    CHECK(!dimmerA.pixels.empty());
+    CHECK(brightness(imageAverage(dimmerA)) < brightness(imageAverage(aloneA)) * 0.9f);
+    return true;
+}
+
+// Landscape without setSun (intensity 0): night, not black. The dim blue night sky shows and lights a white box.
+NRE_SCENARIO(landscape_no_sun) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));   // no material: white
+    Image image = renderAndCapture();
+    saveCapture(image, "landscape-no-sun.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 average = imageAverage(image);
+    glm::vec3 box = image.average(kWidth / 2 - 30, kHeight / 2 - 30, kWidth / 2 + 30, kHeight / 2 + 30);
+    std::printf("frame average (%.3f, %.3f, %.3f), luminance %.4f; box (%.3f, %.3f, %.3f), luminance %.4f\n", average.r,
+                average.g, average.b, luminance(average), box.r, box.g, box.b, luminance(box));
+    CHECK(luminance(average) > 3.0f / 255.0f);
+    CHECK(average.b >= average.r);
+    CHECK(luminance(box) > 3.0f / 255.0f);   // lit by the night sky's ambient
+    return true;
+}
+
+// Landscape with a cubemap sky: shown as authored. A photo sky has a fixed look, so there's no automatic exposure
+// with it (the sun is low here, where it would be about 3).
+NRE_SCENARIO(skybox_landscape) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    TRY(setSun(sunAt(5.0f), glm::vec3(1.0f), 3.0f));
+    setUpClearDaySkybox();
+    return matchesGolden(renderAndCapture(), "skybox.png");
+}
+
+namespace {
+    // A white 1 m box (noUv.obj: no material) on a 400 x 400 m white ground, 3 m ahead of a camera 1 m up looking at
+    // it. The camera sees its +z face, whose middle is at (0, 0.5, -2.5).
+    void setUpWhiteBoxScene() {
+        auto cube = TRY(createModel(TEST_ASSET_DIR "/noUv.obj"));
+        auto ground = TRY(createInstance(cube));
+        TRY(setInstanceTransform(ground, Transform{{0.0f, -0.05f, 0.0f}, glm::identity<glm::quat>(), {400.0f, 0.1f, 400.0f}}));
+        TRY(addInstanceToScene(ground));
+        auto box = TRY(createInstance(cube));
+        TRY(setInstanceTransform(box, Transform{{0.0f, 0.5f, -3.0f}, glm::identity<glm::quat>(), glm::vec3(1.0f)}));
+        TRY(addInstanceToScene(box));
+        TRY(setCameraPosition({0.0f, 1.0f, 0.0f}));
+        TRY(cameraLookAt({0.0f, 0.5f, -3.0f}));
+    }
+
+    // The average of the 40 x 40 px around the middle of the box's camera-facing (+z) face.
+    glm::vec3 boxFace(const Image& image) {
+        glm::vec2 p = toPixel({0.0f, 0.5f, -2.5f});
+        return image.average(uint32_t(p.x) - 20, uint32_t(p.y) - 20, uint32_t(p.x) + 20, uint32_t(p.y) + 20);
+    }
+
+    Handel<Cubemap> loadSkybox(const char* name) {
+        std::string dir = std::string(ASSET_DIR "/skyboxes/") + name + "/";
+        return TRY(createCubemap(dir + "right.png", dir + "left.png", dir + "top.png",
+                                 dir + "bottom.png", dir + "front.png", dir + "back.png"));
+    }
+}
+
+// Landscape at noon, the sun behind the box: its shadowed face is lit by the blue sky, so it's blue-tinted.
+NRE_SCENARIO(ambient_sky_blue) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    setUpWhiteBoxScene();
+    TRY(setSun(sunAt(60.0f), glm::vec3(1.0f), 3.0f));
+    Image image = renderAndCapture();
+    saveCapture(image, "ambient-sky-blue.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 face = boxFace(image);
+    std::printf("shadowed face (%.3f, %.3f, %.3f), luminance %.3f\n", face.r, face.g, face.b, luminance(face));
+    CHECK(face.b > face.r);
+    CHECK(luminance(face) > 0.05f);
+    return true;
+}
+
+// Small with the sunset skybox: the orange sky warms the box, even its sunlit face under a white sun.
+NRE_SCENARIO(ambient_sunset_warm) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSkybox(loadSkybox("sunset")));
+    placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));
+    setUpSun();   // lights the +z face the camera sees
+    Image image = renderAndCapture();
+    saveCapture(image, "ambient-sunset-warm.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 face = image.average(kWidth / 2 - 30, kHeight / 2 - 30, kWidth / 2 + 30, kHeight / 2 + 30);
+    std::printf("lit face (%.3f, %.3f, %.3f)\n", face.r, face.g, face.b);
+    CHECK(face.r > face.b);
+    return true;
+}
+
+// The example's scene (the car, no sun, no skybox) is no darker than before the lighting work: the ambient alone
+// lights it at least 90% as brightly as golden/car.png (the constant ambient of the time).
+NRE_SCENARIO(ambient_small_default) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpCar(true);
+    Image image = renderAndCapture();
+    saveCapture(image, "ambient-small-default.png");
+    Image before = loadPng(GOLDEN_DIR "/car.png");
+    CHECK(!image.pixels.empty() && !before.pixels.empty());
+    // The car covers roughly x 170..470, y 45..240.
+    float now = luminance(image.average(190, 60, 450, 190)), then = luminance(before.average(190, 60, 450, 190));
+    std::printf("car region luminance %.4f, golden car.png %.4f (%.1f%%)\n", now, then, 100.0f * now / then);
+    CHECK(now >= 0.9f * then);
+    return true;
+}
+
+// A skybox lighting the scene is destroyed: the scene goes back to the sky colour (background and ambient), and no
+// frame reads the destroyed cubemap or its filtered maps (validation would report it).
+NRE_SCENARIO(destroy_ibl_source) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));
+    setUpSun();
+    Image never = renderAndCapture();   // the same scene, never with a skybox
+    Handel<Cubemap> sky = loadSkybox("sunset");
+    TRY(setSkybox(sky));
+    Image lit = renderAndCapture();
+    TRY(destroyCubemap(sky));
+    Image last;
+    for (int frame = 0; frame < 3; ++frame) {
+        last = renderAndCapture();
+        CHECK(!last.pixels.empty());
+    }
+    saveCapture(lit, "destroy-ibl-source-before.png");
+    saveCapture(last, "destroy-ibl-source.png");
+    CHECK(!never.pixels.empty() && !lit.pixels.empty());
+    glm::vec3 clear{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    CHECK(near(last.at(10, 10), clear, 2.0f / 255.0f));
+    CHECK(fractionDifferent(last, never, kGoldenTolerance) <= kGoldenMaxFraction);
+    return true;
+}
+
+// R38: Landscape with a cubemap sky has no automatic exposure, so the skybox lights the scene as it does in Small.
+// The box's camera-facing face, turned away from the sun, is lit by the skybox alone: the same in Small, and in
+// Landscape with the sun at 60 or 5 degrees (where the automatic exposure would be about 3).
+NRE_SCENARIO(skybox_landscape_lighting) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpWhiteBoxScene();
+    TRY(setSkybox(loadSkybox("clear_day")));
+    TRY(setSun(sunAt(60.0f), glm::vec3(1.0f), 3.0f));
+    Image small = renderAndCapture();
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    Image high = renderAndCapture();
+    TRY(setSunDirection(sunAt(5.0f)));
+    Image low = renderAndCapture();
+    saveCapture(small, "skybox-landscape-lighting-small.png");
+    saveCapture(low, "skybox-landscape-lighting-5.png");
+    CHECK(!small.pixels.empty() && !high.pixels.empty() && !low.pixels.empty());
+    float s = luminance(boxFace(small)), h = luminance(boxFace(high)), l = luminance(boxFace(low));
+    std::printf("face away from the sun: Small %.3f, Landscape 60 deg %.3f, 5 deg %.3f\n", s, h, l);
+    CHECK(s > 0.05f);
+    CHECK(std::abs(h - s) <= 0.03f * s);
+    CHECK(std::abs(l - s) <= 0.03f * s);
+    return true;
+}
+
+// The sky's light on objects follows the sun on every frame in flight: after a big move, consecutive frames are
+// identical (each slot refiltered its own IBL), and the shadowed face changed.
+NRE_SCENARIO(ambient_follows_sun) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    setUpWhiteBoxScene();
+    TRY(setSun(sunAt(60.0f), glm::vec3(1.0f), 3.0f));
+    Image noon = renderAndCapture();
+    Image noon2 = renderAndCapture();
+    TRY(setSunDirection(sunAt(8.0f)));
+    Image low = renderAndCapture();
+    Image low2 = renderAndCapture();
+    Image low3 = renderAndCapture();
+    CHECK(!noon.pixels.empty() && !noon2.pixels.empty() && !low.pixels.empty() && !low2.pixels.empty() && !low3.pixels.empty());
+    CHECK(fractionDifferent(noon, noon2, 1.0f / 255.0f) == 0.0f);
+    CHECK(fractionDifferent(low, low2, 1.0f / 255.0f) == 0.0f);
+    CHECK(fractionDifferent(low, low3, 1.0f / 255.0f) == 0.0f);
+    glm::vec3 a = boxFace(noon), b = boxFace(low);
+    std::printf("shadowed face: 60 deg (%.3f, %.3f, %.3f), 8 deg (%.3f, %.3f, %.3f)\n", a.r, a.g, a.b, b.r, b.g, b.b);
+    CHECK(!near(a, b, 3.0f / 255.0f));
+    return true;
+}
+
+// The sky near the horizon changes fast as the sun moves, so there it's regenerated after much smaller moves (R39):
+// a sun setting slowly (0.02 degrees a frame around 1 degree, the sun in view) changes the frame by at most 1/255 on
+// average from one frame to the next, with no pops where the sky (and its light on the box) catches up.
+NRE_SCENARIO(sky_sunset_smooth) {
+    Session session(ApiMode::SceneMode);
+    setUpSkyScene(1.3f, 20.0f);
+    placeModel(TEST_ASSET_DIR "/noUv.obj", glm::vec3(0.0f, 0.0f, -3.0f));
+    TRY(setCameraPosition({0.0f, 0.3f, 0.0f}));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    Image previous = renderAndCapture();
+    CHECK(!previous.pixels.empty());
+    float worst = 0.0f, worstAt = 0.0f;
+    for (int i = 1; i <= 30; ++i) {
+        float elevation = 1.3f - 0.02f * float(i);
+        TRY(setSunDirection(sunAt(elevation, 20.0f)));
+        Image image = renderAndCapture();
+        CHECK(!image.pixels.empty());
+        double change = 0.0;   // mean over the pixels of the largest channel difference
+        for (size_t k = 0; k < image.pixels.size(); ++k) {
+            glm::vec3 d = glm::abs(image.pixels[k] - previous.pixels[k]);
+            change += std::max({d.x, d.y, d.z});
+        }
+        float mean = float(change / double(image.pixels.size()));
+        if (mean > worst) { worst = mean; worstAt = elevation; }
+        previous = std::move(image);
+    }
+    std::printf("largest mean change between frames 0.02 degrees apart: %.2f/255 (at %+.2f degrees)\n", worst * 255.0f, worstAt);
+    CHECK(worst <= 1.0f / 255.0f);
+    return true;
+}
+
+// ---- Distance haze ----
+
+namespace {
+    // The haze scenes: Landscape (haze visibility 8 km, 300 m thick, the defaults), the sun elevationDeg up at
+    // azimuthDeg (180: behind the camera, lighting the boxes' camera-facing +z faces), the camera 10 m up looking
+    // down -z with pitch 0 (the horizon is between rows 239 and 240). Returns Box.glb (red, 1 m).
+    Handel<Model> setUpHazeScene(float elevationDeg = 60.0f, float azimuthDeg = 180.0f) {
+        bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+        TRY(setSceneLighting(SceneLighting::Landscape));
+        TRY(setSun(sunAt(elevationDeg, azimuthDeg), glm::vec3(1.0f), 3.0f));
+        TRY(setCameraPosition({0.0f, 10.0f, 0.0f}));
+        TRY(setCameraRotation(0.0f, 0.0f));
+        return TRY(createModel(ASSET_DIR "/Box.glb"));
+    }
+
+    void addScaledBox(Handel<Model> model, glm::vec3 position, glm::vec3 scale) {
+        auto box = TRY(createInstance(model));
+        TRY(setInstanceTransform(box, Transform{position, glm::identity<glm::quat>(), scale}));
+        TRY(addInstanceToScene(box));
+    }
+
+    // The haze-far scene: a 20 m box 6 km ahead, its middle on the view axis, and a 4 m box 50 m ahead, off to the left.
+    void addFarAndNearBoxes(Handel<Model> box) {
+        addScaledBox(box, {0.0f, 10.0f, -6000.0f}, glm::vec3(20.0f));
+        addScaledBox(box, {-15.0f, 10.0f, -50.0f}, glm::vec3(4.0f));
+    }
+
+    // At 6 km the far box is about 1.5 px across: the 2 x 2 px at the view's centre.
+    glm::vec3 farBox(const Image& image) { return image.average(319, 239, 321, 241); }
+    // The sky right above the horizon, 20 px to the right of the far box.
+    glm::vec3 skyBesideFarBox(const Image& image) { return image.average(340, 237, 345, 239); }
+    glm::vec3 nearBox(const Image& image) {
+        glm::vec2 p = toPixel({-15.0f, 10.0f, -48.0f});
+        return image.average(uint32_t(p.x) - 3, uint32_t(p.y) - 3, uint32_t(p.x) + 4, uint32_t(p.y) + 4);
+    }
+
+    float maxChannelDifference(glm::vec3 a, glm::vec3 b) {
+        glm::vec3 d = glm::abs(a - b);
+        return std::max({d.x, d.y, d.z});
+    }
+
+    void printColor(const char* label, glm::vec3 c) { std::printf("%s (%.3f, %.3f, %.3f)\n", label, c.r, c.g, c.b); }
+}
+
+// Landscape at noon: a red box 6 km away has faded into the horizon's haze; one 50 m away keeps its colour.
+NRE_SCENARIO(haze_far) {
+    Session session(ApiMode::SceneMode);
+    addFarAndNearBoxes(setUpHazeScene());
+    Image image = renderAndCapture();
+    saveCapture(image, "haze-far.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 far = farBox(image), sky = skyBesideFarBox(image), near50 = nearBox(image);
+    printColor("far box", far);
+    printColor("sky beside it", sky);
+    printColor("near box", near50);
+    CHECK(maxChannelDifference(far, sky) < 0.08f);
+    CHECK(maxChannelDifference(near50, sky) >= 0.08f);
+    CHECK(near50.r > near50.g + 0.2f);   // still red
+    return true;
+}
+
+// setHaze(0) turns it off: the far box shows red against the sky. setSceneLighting brings the mode's haze back.
+NRE_SCENARIO(haze_off) {
+    Session session(ApiMode::SceneMode);
+    addFarAndNearBoxes(setUpHazeScene());
+    TRY(setHaze(0.0f));
+    Image off = renderAndCapture();
+    saveCapture(off, "haze-off.png");
+    CHECK(!off.pixels.empty());
+    glm::vec3 far = farBox(off), sky = skyBesideFarBox(off);
+    printColor("no haze: far box", far);
+    printColor("no haze: sky beside it", sky);
+    CHECK(maxChannelDifference(far, sky) > 0.15f);
+#ifndef NDEBUG
+    CHECK(!setHaze(-1.0f));
+    CHECK(!setHaze(8000.0f, 0.0f));
+    CHECK(!setHaze(8000.0f, -300.0f));
+#endif
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    Image reset = renderAndCapture();
+    CHECK(!reset.pixels.empty());
+    printColor("after setSceneLighting: far box", farBox(reset));
+    CHECK(maxChannelDifference(farBox(reset), skyBesideFarBox(reset)) < 0.08f);
+    return true;
+}
+
+// The haze thins out with height: a box on a 600 m pillar 4 km away is less hazed than the pillar's foot.
+NRE_SCENARIO(haze_height) {
+    Session session(ApiMode::SceneMode);
+    Handel<Model> box = setUpHazeScene();
+    addScaledBox(box, {0.0f, 300.0f, -4000.0f}, {60.0f, 600.0f, 60.0f});
+    addScaledBox(box, {0.0f, 630.0f, -4000.0f}, glm::vec3(60.0f));
+    Image image = renderAndCapture();
+    saveCapture(image, "haze-height.png");
+    CHECK(!image.pixels.empty());
+    auto at = [&](glm::vec3 world) {
+        glm::vec2 p = toPixel(world);
+        return image.average(uint32_t(p.x) - 1, uint32_t(p.y) - 1, uint32_t(p.x) + 2, uint32_t(p.y) + 2);
+    };
+    // Both on the camera-facing face. At the horizon (beside the foot) the sky is all haze.
+    glm::vec3 top = at({0.0f, 630.0f, -3970.0f}), foot = at({0.0f, 40.0f, -3970.0f});
+    glm::vec3 haze = image.average(360, 237, 365, 239);
+    printColor("box on top", top);
+    printColor("pillar's foot", foot);
+    printColor("haze at the horizon", haze);
+    CHECK(maxChannelDifference(top, haze) > maxChannelDifference(foot, haze) + 0.05f);
+    CHECK(top.r - top.b > foot.r - foot.b + 0.05f);   // redder: more of the box shows through
+    return true;
+}
+
+// Terrain meets the sky without a seam: a 40 km red ground seen from 200 m up at noon. Its far edge (about 18 km away,
+// rows 244 and 245) and the sky right above the horizon (rows 237 and 238) look the same.
+NRE_SCENARIO(haze_horizon_seam) {
+    Session session(ApiMode::SceneMode);
+    Handel<Model> box = setUpHazeScene();
+    addScaledBox(box, {0.0f, -0.5f, 0.0f}, {40000.0f, 1.0f, 40000.0f});
+    TRY(setCameraPosition({0.0f, 200.0f, 0.0f}));
+    Image image = renderAndCapture();
+    saveCapture(image, "haze-horizon-seam.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 ground = image.average(220, 244, 420, 246), sky = image.average(220, 237, 420, 239);
+    glm::vec3 nearGround = image.average(220, 400, 420, 410);   // about 1 km away: still red
+    printColor("ground at its far edge", ground);
+    printColor("sky above the horizon", sky);
+    printColor("ground 1 km away", nearGround);
+    CHECK(maxChannelDifference(ground, sky) < 0.05f);
+    CHECK(nearGround.r > nearGround.b + 0.1f);
+    return true;
+}
+
+// Golden hour, the sun 5 degrees up: far ground fades into the haze, which is brighter toward the sun. A white 40 km
+// ground; the camera 50 m up faces the sun, then turns away. (Its hue follows the sky's horizon, which at this height
+// of the sun is as orange away from the sun as toward it; haze_sun_lobe checks the sun's warm lobe on its own.)
+NRE_SCENARIO(haze_golden_hour) {
+    Session session(ApiMode::SceneMode);
+    setUpHazeScene(5.0f, 0.0f);
+    auto cube = TRY(createModel(TEST_ASSET_DIR "/noUv.obj"));   // no material: white
+    addScaledBox(cube, {0.0f, -0.05f, 0.0f}, {40000.0f, 0.1f, 40000.0f});
+    TRY(setCameraPosition({0.0f, 50.0f, 0.0f}));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    Image toward = renderAndCapture();
+    TRY(setCameraRotation(3.14159265f, 0.0f));   // yaw in radians: facing +z
+    Image away = renderAndCapture();
+    saveCapture(toward, "haze-golden-hour-toward.png");
+    saveCapture(away, "haze-golden-hour-away.png");
+    CHECK(!toward.pixels.empty() && !away.pixels.empty());
+    // The ground 8 to 14 km away (rows 241 and 242), right of the sun's column (the disk is above the horizon at the
+    // centre): it has faded into the haze, the sky right above the horizon (rows 237 and 238).
+    glm::vec3 t = toward.average(400, 241, 600, 243), a = away.average(400, 241, 600, 243);
+    glm::vec3 skyT = toward.average(400, 237, 600, 239), skyA = away.average(400, 237, 600, 239);
+    printColor("far ground toward the sun", t);
+    printColor("sky above it", skyT);
+    printColor("far ground away from the sun", a);
+    printColor("sky above it", skyA);
+    CHECK(maxChannelDifference(t, skyT) < 0.08f && maxChannelDifference(a, skyA) < 0.08f);
+    // A quarter as bright, so the sunward side isn't pushed to white by the tone curve.
+    TRY(setExposure(0.25f));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    t = renderAndCapture().average(400, 241, 600, 243);
+    TRY(setCameraRotation(3.14159265f, 0.0f));
+    a = renderAndCapture().average(400, 241, 600, 243);
+    printColor("at exposure 0.25: far ground toward the sun", t);
+    printColor("at exposure 0.25: far ground away from the sun", a);
+    CHECK(luminance(t) > 1.2f * luminance(a));
+    return true;
+}
+
+// The haze's forward lobe on its own: Small, with haze, a grey sky colour and an orange sun 5 degrees up. A white box
+// 4 km toward the sun takes on the sun's colour; one 4 km away from it fades into the plain sky colour.
+NRE_SCENARIO(haze_sun_lobe) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setHaze(2000.0f));
+    TRY(setSkyColor(glm::vec3(0.5f)));
+    TRY(setSun(sunAt(5.0f), glm::vec3(1.0f, 0.55f, 0.25f), 0.5f));   // dim, so the lobe isn't mapped to white
+    auto cube = TRY(createModel(TEST_ASSET_DIR "/noUv.obj"));   // no material: white
+    addScaledBox(cube, {0.0f, 10.0f, -4000.0f}, glm::vec3(40.0f));
+    addScaledBox(cube, {0.0f, 10.0f, 4000.0f}, glm::vec3(40.0f));
+    TRY(setCameraPosition({0.0f, 10.0f, 0.0f}));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    Image toward = renderAndCapture();
+    TRY(setCameraRotation(3.14159265f, 0.0f));
+    Image away = renderAndCapture();
+    saveCapture(toward, "haze-sun-lobe-toward.png");
+    saveCapture(away, "haze-sun-lobe-away.png");
+    CHECK(!toward.pixels.empty() && !away.pixels.empty());
+    // Each box is about 4 px across, at the view's centre.
+    glm::vec3 t = toward.average(319, 239, 321, 241), a = away.average(319, 239, 321, 241);
+    printColor("box toward the sun", t);
+    printColor("box away from the sun", a);
+    CHECK(t.r > t.b + 0.05f);   // the plain grey sky would give r = b
+    CHECK(near(a, glm::vec3(srgbEncode(0.5f)), 0.05f));   // the sky colour, as the background shows it
+    return true;
+}
+
+namespace {
+    // The perf scenarios (not CTest tests, R3: run them by hand on a Release build): 2560 x 1600, Landscape, the demo
+    // car on a 2 km ground, the sun at sunPath(frame). Prints the mean frame time over 600 frames after 60 warm-up
+    // frames; the target is 6.06 ms (165 fps).
+    bool measureLandscapeFrames(glm::vec3 (*sunPath)(int frame)) {
+        Session session(ApiMode::SceneMode);
+        bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+        TRY(Unsafe::setRenderTarget(2560, 1600));
+        TRY(setSceneLighting(SceneLighting::Landscape));
+        auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
+        auto ground = TRY(createInstance(box));
+        TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
+        TRY(addInstanceToScene(ground));
+        setUpCar(true);
+        TRY(setCameraPosition({2.5f, 1.5f, 1.0f}));
+        TRY(cameraLookAt({0.0f, 0.3f, -3.0f}));
+        TRY(setSun(sunPath(0), glm::vec3(1.0f), 3.0f));
+        constexpr int warmup = 60, frames = 600;
+        using Clock = std::chrono::steady_clock;
+        Clock::time_point start;
+        for (int frame = 0; frame < warmup + frames; ++frame) {
+            if (frame == warmup) {
+                vkDeviceWaitIdle(Unsafe::getDevice());
+                start = Clock::now();
+            }
+            TRY(setSunDirection(sunPath(frame)));
+            TRY(renderFrame());
+            TRY(submitFrame());
+            TRY(presentFrame());
+        }
+        vkDeviceWaitIdle(Unsafe::getDevice());
+        double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count() / frames;
+        std::printf("mean frame %.3f ms (%.0f fps) over %d frames at 2560x1600\n", ms, 1000.0 / ms, frames);
+        return true;
+    }
+}
+
+// The sun turning 0.5 degrees a frame around the vertical, 30 degrees up: it always casts shadows, and the sky and
+// its IBL are recomputed every frame.
+NRE_SCENARIO(perf_landscape) {
+    return measureLandscapeFrames([](int frame) { return sunAt(30.0f, 0.5f * float(frame)); });
+}
+
+// A slow sunset: the sun 1 degree up, moving 0.02 degrees a frame (around the vertical, so it stays at the horizon
+// with its long shadows). Near the horizon that's enough to recompute the sky and its IBL every frame (R39).
+NRE_SCENARIO(perf_landscape_sunset) {
+    return measureLandscapeFrames([](int frame) { return sunAt(1.0f, 0.02f * float(frame)); });
+}
+
+// ---- Picking and the projection ----
+
+namespace {
+    // Where a world point lands in a width x height scene, in pixels (top-left origin), through the public matrices.
+    glm::vec2 projectToPixel(glm::vec3 world, float width, float height) {
+        glm::vec4 clip = TRY(getProjectionMatrix()) * TRY(getViewMatrix()) * glm::vec4(world, 1.0f);
+        glm::vec2 ndc = glm::vec2(clip) / clip.w;
+        return {(ndc.x * 0.5f + 0.5f) * width, (ndc.y * 0.5f + 0.5f) * height};
+    }
+
+    Handel<Instance> addBox(Handel<Model> model, glm::vec3 position) {
+        auto box = TRY(createInstance(model));
+        TRY(addInstanceToScene(box));
+        TRY(translateInstance(box, position));
+        return box;
+    }
+
+    bool nearF(float a, float b, float relative) { return std::fabs(a - b) <= relative * std::max(1.0f, std::fabs(b)); }
+}
+
+// Two boxes side by side, 4 m ahead: picking at each one's projected centre finds it, on its front face.
+NRE_SCENARIO(pick_hit) {
+    Session session(ApiMode::SceneMode);
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    glm::vec3 positions[2] = {{-1.5f, 0.3f, -4.0f}, {1.5f, -0.4f, -4.0f}};
+    Handel<Instance> boxes[2] = {addBox(model, positions[0]), addBox(model, positions[1])};
+    for (int i = 0; i < 2; ++i) {
+        auto hit = TRY(pickInstance(projectToPixel(positions[i], kWidth, kHeight)));
+        CHECK(hit.has_value());
+        CHECK(hit->instance == boxes[i]);
+        CHECK(std::fabs(hit->point.z - (positions[i].z + 0.5f)) < 1e-3f);
+        CHECK(std::fabs(hit->point.x - positions[i].x) <= 0.5f + 1e-3f);
+    }
+    // Straight ahead of the camera the distance is exactly the camera-to-face distance.
+    TRY(translateInstance(boxes[0], glm::vec3(1.5f, -0.3f, 0.0f)));   // box 0 now at (0, 0, -4)
+    auto centre = TRY(pickInstance(glm::vec2(kWidth / 2.0f, kHeight / 2.0f)));
+    CHECK(centre.has_value() && centre->instance == boxes[0]);
+    CHECK(nearF(centre->distance, 3.5f, 1e-3f));
+    CHECK(glm::length(centre->point - glm::vec3(0.0f, 0.0f, -3.5f)) < 1e-3f);
+    return true;
+}
+
+NRE_SCENARIO(pick_miss) {
+    Session session(ApiMode::SceneMode);
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    addBox(model, glm::vec3(0.0f, 0.0f, -4.0f));
+    auto sky = TRY(pickInstance(glm::vec2(10.0f, 10.0f)));
+    CHECK(!sky.has_value());
+    auto centre = TRY(pickInstance(glm::vec2(kWidth / 2.0f, kHeight / 2.0f)));
+    CHECK(centre.has_value());
+    return true;
+}
+
+// Two boxes in line: the nearer one hides the farther one.
+NRE_SCENARIO(pick_nearest) {
+    Session session(ApiMode::SceneMode);
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    addBox(model, glm::vec3(0.0f, 0.0f, -8.0f));   // created first, so the order doesn't decide
+    auto near = addBox(model, glm::vec3(0.0f, 0.0f, -4.0f));
+    auto hit = TRY(pickInstance(glm::vec2(kWidth / 2.0f, kHeight / 2.0f)));
+    CHECK(hit.has_value() && hit->instance == near);
+    CHECK(nearF(hit->distance, 3.5f, 1e-3f));
+    return true;
+}
+
+NRE_SCENARIO(pick_hidden_and_destroyed) {
+    Session session(ApiMode::SceneMode);
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    auto otherModel = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    auto far = addBox(model, glm::vec3(0.0f, 0.0f, -12.0f));
+    auto middle = addBox(otherModel, glm::vec3(0.0f, 0.0f, -8.0f));
+    auto near = addBox(model, glm::vec3(0.0f, 0.0f, -4.0f));
+    glm::vec2 centre(kWidth / 2.0f, kHeight / 2.0f);
+    auto first = TRY(pickInstance(centre));
+    CHECK(first.has_value() && first->instance == near);
+    TRY(setVisibility(near, false));
+    auto hit = TRY(pickInstance(centre));
+    CHECK(hit.has_value() && hit->instance == middle);
+    TRY(destroyModel(otherModel));   // its instance stays valid but draws nothing, so it can't be picked either
+    hit = TRY(pickInstance(centre));
+    CHECK(hit.has_value() && hit->instance == far);
+    TRY(setVisibility(far, false));
+    CHECK(!TRY(pickInstance(centre)).has_value());
+    return true;
+}
+
+// A 400x200 target (aspect 2; the window's is 4:3): pixels are the target's. The expected pixel is worked out by hand
+// from the 60 degree vertical fov, the target size and the box position, not from getProjectionMatrix(), so a
+// projection with the wrong aspect would miss the box.
+NRE_SCENARIO(pick_render_target) {
+    Session session(ApiMode::SceneMode);
+    TRY(Unsafe::setRenderTarget(400, 200));
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    glm::vec3 position(-2.2f, 0.3f, -4.0f);
+    auto box = addBox(model, position);
+    const float tanHalfFov = std::tan(1.0471976f / 2.0f), aspect = 400.0f / 200.0f;
+    glm::vec3 face = position + glm::vec3(0.0f, 0.0f, 0.5f);   // the middle of the front face
+    float ndcX = face.x / -face.z / (tanHalfFov * aspect);
+    float ndcY = -face.y / -face.z / tanHalfFov;               // +Y is up in the world, down in the image
+    glm::vec2 pixel((ndcX * 0.5f + 0.5f) * 400.0f, (ndcY * 0.5f + 0.5f) * 200.0f);
+    auto hit = TRY(pickInstance(pixel));
+    CHECK(hit.has_value() && hit->instance == box);
+    if (hit) CHECK(glm::length(hit->point - face) < 2e-3f);
+    // Just outside the box's left edge (front face) and right edge (its far corner, as the right side face is seen) at that height.
+    float left = ((-2.7f / 3.5f / (tanHalfFov * aspect)) * 0.5f + 0.5f) * 400.0f;
+    float right = ((-1.7f / 4.5f / (tanHalfFov * aspect)) * 0.5f + 0.5f) * 400.0f;
+    CHECK(!TRY(pickInstance(glm::vec2(left - 3.0f, pixel.y))).has_value());
+    CHECK(!TRY(pickInstance(glm::vec2(right + 3.0f, pixel.y))).has_value());
+    CHECK(TRY(pickInstance(glm::vec2(left + 3.0f, pixel.y))).has_value());
+    CHECK(TRY(pickInstance(glm::vec2(right - 3.0f, pixel.y))).has_value());
+    return true;
+}
+
+// Scaled and rotated instances: distance and point are in world units, not model units.
+NRE_SCENARIO(pick_scaled) {
+    Session session(ApiMode::SceneMode);
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    glm::vec2 centre(kWidth / 2.0f, kHeight / 2.0f);
+    auto stretched = addBox(model, glm::vec3(0.0f, 0.0f, -4.0f));
+    TRY(scaleInstance(stretched, glm::vec3(1.0f, 1.0f, 3.0f)));   // front face at z = -4 + 1.5
+    auto hit = TRY(pickInstance(centre));
+    CHECK(hit.has_value() && hit->instance == stretched);
+    CHECK(hit && nearF(hit->distance, 2.5f, 1e-3f));
+    CHECK(hit && std::fabs(hit->point.z + 2.5f) < 1e-3f);
+    TRY(setVisibility(stretched, false));
+
+    // Off-axis, scaled by 2 and turned 90 degrees about Y (a cube looks the same): its front face is at z = -5.
+    glm::vec3 position(3.0f, 0.0f, -6.0f);
+    auto big = addBox(model, position);
+    TRY(scaleInstance(big, glm::vec3(2.0f)));
+    TRY(rotateInstance(big, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f)));
+    glm::vec3 face(3.0f, 0.0f, -5.0f);
+    auto offAxis = TRY(pickInstance(projectToPixel(face, float(kWidth), float(kHeight))));
+    CHECK(offAxis.has_value() && offAxis->instance == big);
+    CHECK(offAxis && glm::length(offAxis->point - face) < 5e-3f);
+    CHECK(offAxis && nearF(offAxis->distance, glm::length(face), 1e-3f));
+    return true;
+}
+
+// No render target: window coordinates, like getMousePosition().
+NRE_SCENARIO(pick_window) {
+    Session session(ApiMode::SceneMode);
+    TRY(Unsafe::clearRenderTarget());
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    glm::vec3 position(1.0f, 0.4f, -4.0f);
+    auto box = addBox(model, position);
+    auto hit = TRY(pickInstance(projectToPixel(position, float(kWidth), float(kHeight))));
+    CHECK(hit.has_value() && hit->instance == box);
+    CHECK(!TRY(pickInstance(glm::vec2(10.0f, 10.0f))).has_value());
+    return true;
+}
+
+// The public projection matches the picture: the box's eight corners, projected, bound the pixels it covers.
+NRE_SCENARIO(projection_matches) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    setUpSun();
+    auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    glm::vec3 centre(0.8f, 0.5f, -4.0f);
+    addBox(model, centre);
+    Image image = renderAndCapture();
+    CHECK(!image.pixels.empty());
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (int corner = 0; corner < 8; ++corner) {
+        glm::vec3 offset((corner & 1) ? 0.5f : -0.5f, (corner & 2) ? 0.5f : -0.5f, (corner & 4) ? 0.5f : -0.5f);
+        glm::vec2 p = projectToPixel(centre + offset, float(kWidth), float(kHeight));
+        lo = glm::min(lo, p);
+        hi = glm::max(hi, p);
+    }
+    glm::vec3 sky{srgbEncode(0.1f), srgbEncode(0.3f), srgbEncode(0.6f)};
+    glm::ivec2 seenLo(1 << 20), seenHi(-1);
+    for (uint32_t y = 0; y < image.height; ++y)
+        for (uint32_t x = 0; x < image.width; ++x)
+            if (!near(image.at(x, y), sky, 10.0f / 255.0f)) {
+                seenLo = glm::min(seenLo, glm::ivec2(x, y));
+                seenHi = glm::max(seenHi, glm::ivec2(x, y));
+            }
+    CHECK(seenHi.x >= 0);
+    CHECK(std::fabs(float(seenLo.x) - lo.x) <= 2.0f && std::fabs(float(seenLo.y) - lo.y) <= 2.0f);
+    CHECK(std::fabs(float(seenHi.x + 1) - hi.x) <= 2.0f && std::fabs(float(seenHi.y + 1) - hi.y) <= 2.0f);
+    return true;
+}
+
+int main(int argc, char** argv) {
+    return runScenarios(argc, argv);
+}

@@ -1,0 +1,28 @@
+#version 450
+// Built into librenderer (Ibl::filterLdr): an LDR skybox (8-bit display values, one mip, any size) as the linear HDR
+// source the IBL filters read: mip 0 of a smaller cubemap, each texel the average of pc.subSamples^2 points of the
+// skybox under it, every one expanded with the inverse tone curve first (as sky.frag draws it), so bright spots keep
+// their energy. The mips below are then blitted from it.
+#include "cubeFaces.glsl"
+#include "toneCurve.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform samplerCube skybox;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray hdr;   // mip 0, 6 faces
+layout(push_constant) uniform PC {
+    int subSamples;   // per side of a texel: the skybox's size / this one's (at least 1)
+} pc;
+
+void main() {
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    int size = imageSize(hdr).x;
+    if (p.x >= size || p.y >= size) return;
+    vec3 sum = vec3(0.0);
+    for (int j = 0; j < pc.subSamples; ++j) {
+        for (int i = 0; i < pc.subSamples; ++i) {
+            vec2 st = (vec2(p.xy) + (vec2(i, j) + 0.5) / float(pc.subSamples)) / float(size) * 2.0 - 1.0;
+            sum += inverseToneMapACES(textureLod(skybox, faceDirection(p.z, st), 0.0).rgb);
+        }
+    }
+    imageStore(hdr, p, vec4(sum / float(pc.subSamples * pc.subSamples), 1.0));
+}
