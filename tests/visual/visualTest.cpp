@@ -1518,6 +1518,54 @@ namespace {
 }
 
 // Two boxes side by side, 4 m ahead: picking at each one's projected centre finds it, on its front face.
+// createMeshModel: a 2x2 quad built in code, 3 m in front of the camera, lit head-on by the sun.
+// Zero normals must be computed to the same result as explicit ones; clockwise triangles are back faces (culled);
+// the mesh is pickable like a loaded model; bad indices are misuse (reported in Debug).
+NRE_SCENARIO(mesh_model) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setCameraPosition(glm::vec3(0.0f)));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    TRY(setSun(glm::vec3(0.0f, 0.0f, -1.0f)));
+    TRY(setSkyColor(glm::vec3(0.0f)));
+    const glm::vec2 corner[4] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+    auto quad = [&](glm::vec3 normal) {
+        std::vector<Vertex> v;
+        for (glm::vec2 c : corner) v.push_back({glm::vec3(c, -3.0f), normal, c * 0.5f + 0.5f});
+        return v;
+    };
+    const std::vector<uint32_t> ccw = {0, 1, 2, 0, 2, 3}, cw = {0, 2, 1, 0, 3, 2};
+    const glm::uvec2 centre(kWidth / 2, kHeight / 2);
+    auto show = [&](Handel<Model> model) {
+        auto instance = TRY(createInstance(model));
+        TRY(addInstanceToScene(instance));
+        Image image = renderAndCapture();
+        TRY(destroyInstance(instance));
+        return image;
+    };
+    Image computed = show(TRY(createMeshModel(quad(glm::vec3(0.0f)), ccw)));
+    Image given = show(TRY(createMeshModel(quad(glm::vec3(0.0f, 0.0f, 1.0f)), ccw)));
+    Image backFace = show(TRY(createMeshModel(quad(glm::vec3(0.0f)), cw)));
+    saveCapture(computed, "mesh-model.png");
+    const glm::vec3 lit = computed.at(centre.x, centre.y), background = backFace.at(centre.x, centre.y);
+    CHECK(luminance(lit) > 0.2f);
+    CHECK(glm::length(lit - given.at(centre.x, centre.y)) < 2.0f / 255.0f);
+    CHECK(luminance(background) < 0.02f);
+
+    auto pickable = TRY(createInstance(TRY(createMeshModel(quad(glm::vec3(0.0f)), ccw))));
+    TRY(addInstanceToScene(pickable));
+    auto hit = TRY(pickInstance(glm::vec2(centre)));
+    CHECK(hit.has_value() && hit->instance == pickable);
+    CHECK(nearF(hit->distance, 3.0f, 1e-3f));
+#ifndef NDEBUG
+    const std::vector<uint32_t> outOfRange = {0, 1, 7};
+    CHECK(!createMeshModel(quad(glm::vec3(0.0f)), outOfRange));
+    const std::vector<uint32_t> partial = {0, 1};
+    CHECK(!createMeshModel(quad(glm::vec3(0.0f)), partial));
+#endif
+    return true;
+}
+
 NRE_SCENARIO(pick_hit) {
     Session session(ApiMode::SceneMode);
     auto model = TRY(createModel(ASSET_DIR "/Box.glb"));

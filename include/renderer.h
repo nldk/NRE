@@ -3,6 +3,7 @@
 #include <expected>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <renderer_export.h>
 #include <string>
 #include <string_view>
@@ -189,6 +190,13 @@ namespace NRE {
         }
     };
 
+    // One vertex of a model you build yourself with createMeshModel(). The same layout the renderer uses internally.
+    struct Vertex {
+        glm::vec3 position{0.0f};
+        glm::vec3 normal{0.0f};   // all zero: createMeshModel computes it from the triangles around the vertex
+        glm::vec2 uv{0.0f};
+    };
+
     struct Instance;
     // Where pickInstance() hit: the instance, the distance from the camera along the ray (world units) and the
     // world-space point.
@@ -232,6 +240,12 @@ namespace NRE {
     // A Model is the loaded file (meshes, GPU buffers, materials) and isn't drawn by itself.
     // Draw it through instances: each one is a copy with its own transform, and they all share the model's data.
     RENDERER_API Result<Handel<Model>> createModel(std::string modelPath);
+    // A model from your own geometry (terrain, water, editor meshes): a triangle list, counter-clockwise front faces,
+    // indices into vertices. Vertices whose normal is all zero get one computed from the triangles that use them
+    // (area-weighted), so procedural meshes can skip normals. An empty material uses the default one. Draw it through
+    // instances like a loaded model; shadows, picking and destroyModel() work the same. The geometry is copied.
+    RENDERER_API Result<Handel<Model>> createMeshModel(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
+                                                       Handel<Material> material = {});
     // Instances of a destroyed model stay valid but draw nothing.
     RENDERER_API Result<void> destroyModel(Handel<Model> model);
     RENDERER_API Result<Handel<Instance>> createInstance(Handel<Model> model);

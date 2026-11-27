@@ -27,6 +27,7 @@ NRE_FUNCTION(Result<void>, destroyPipeline, (Handel<Pipeline> pipeline), (pipeli
 NRE_FUNCTION(Result<void>, bindPipeline, (Handel<Pipeline> pipeline), (pipeline))
 
 NRE_FUNCTION(Result<Handel<Model>>, createModel, (std::string modelPath), (std::move(modelPath)))
+NRE_FUNCTION(Result<Handel<Model>>, createMeshModel, (std::span<const Vertex> vertices, std::span<const uint32_t> indices, Handel<Material> material), (vertices, indices, material))
 NRE_FUNCTION(Result<void>, destroyModel, (Handel<Model> model), (model))
 NRE_FUNCTION(Result<Handel<Instance>>, createInstance, (Handel<Model> model), (model))
 NRE_FUNCTION(Result<void>, destroyInstance, (Handel<Instance> instance), (instance))

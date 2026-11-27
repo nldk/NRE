@@ -46,7 +46,7 @@ if(NRE_UNSAFE_API)
                      scene-switch skybox-landscape landscape-no-sun
                      ambient-sky-blue ambient-sunset-warm ambient-small-default destroy-ibl-source
                      skybox-landscape-lighting ambient-follows-sun sky-sunset-smooth
-                     pick-hit pick-miss pick-nearest pick-hidden-and-destroyed pick-render-target pick-scaled pick-window
+                     pick-hit pick-miss pick-nearest pick-hidden-and-destroyed pick-render-target pick-scaled pick-window mesh-model
                      projection-matches haze-far haze-off haze-height haze-horizon-seam haze-golden-hour
                      haze-sun-lobe)
         add_test(NAME ${scenario} COMMAND nre_visual_test ${scenario})

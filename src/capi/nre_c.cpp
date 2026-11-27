@@ -4,6 +4,7 @@
 
 #include "nre.h"
 
+#include <cstddef>
 #include <cstring>
 #include <exception>
 #include <string>
@@ -129,6 +130,9 @@ namespace {
     NRE_C_HANDLE(NreCubemap, Cubemap)
 #undef NRE_C_HANDLE
     static_assert(NRE::Handel<NRE::Model>{}.index + 1u == 0u, "the empty C++ handle must map to {0, 0}");
+    // nreCreateMeshModel passes the C vertex array straight through.
+    static_assert(sizeof(NreVertex) == sizeof(NRE::Vertex) && offsetof(NreVertex, normal) == offsetof(NRE::Vertex, normal)
+                  && offsetof(NreVertex, uv) == offsetof(NRE::Vertex, uv), "NreVertex must match NRE::Vertex");
 
     // ---------------------------------------------------------------------------------------------
     // Results
@@ -241,6 +245,11 @@ NRE_C_EXPORT NreErrorCode nreBindPipeline(NrePipeline pipeline) { NRE_C_CALL(NRE
 // -------------------------------------------------------------------------------------------------
 NRE_C_EXPORT NreErrorCode nreCreateModel(const char* modelPath, NreModel* model) {
     NRE_C_CALL(NRE::createModel(modelPath), model);
+}
+NRE_C_EXPORT NreErrorCode nreCreateMeshModel(const NreVertex* vertices, uint32_t vertexCount, const uint32_t* indices,
+                                             uint32_t indexCount, NreMaterial material, NreModel* model) {
+    NRE_C_CALL(NRE::createMeshModel({reinterpret_cast<const NRE::Vertex*>(vertices), vertexCount},
+                                    {indices, indexCount}, toCpp(material)), model);
 }
 NRE_C_EXPORT NreErrorCode nreDestroyModel(NreModel model) { NRE_C_CALL(NRE::destroyModel(toCpp(model))); }
 NRE_C_EXPORT NreErrorCode nreCreateInstance(NreModel model, NreInstance* instance) {

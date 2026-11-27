@@ -157,6 +157,13 @@ typedef struct NreVec3 { float x, y, z; } NreVec3;
 typedef struct NreQuat { float x, y, z, w; } NreQuat;   // identity: {0, 0, 0, 1}
 typedef struct NreMat4 { float m[16]; } NreMat4;        // column-major: m[column * 4 + row]
 
+// One vertex for nreCreateMeshModel. A normal of {0,0,0} is computed from the triangles using the vertex.
+typedef struct NreVertex {
+    NreVec3 position;
+    NreVec3 normal;
+    NreVec2 uv;
+} NreVertex;
+
 // Applied as scale, then rotation, then translation. Identity: position {0,0,0}, rotation {0,0,0,1}, scale {1,1,1}.
 typedef struct NreTransform {
     NreVec3 position;
@@ -219,6 +226,9 @@ NRE_C_EXPORT NreErrorCode nreBindPipeline(NrePipeline pipeline);
 // Models and instances
 // ---------------------------------------------------------------------------
 NRE_C_EXPORT NreErrorCode nreCreateModel(const char* modelPath, NreModel* model);
+// A model from your own triangles (counter-clockwise front faces). The arrays are copied; material {0} = default.
+NRE_C_EXPORT NreErrorCode nreCreateMeshModel(const NreVertex* vertices, uint32_t vertexCount, const uint32_t* indices,
+                                             uint32_t indexCount, NreMaterial material, NreModel* model);
 NRE_C_EXPORT NreErrorCode nreDestroyModel(NreModel model);
 NRE_C_EXPORT NreErrorCode nreCreateInstance(NreModel model, NreInstance* instance);
 NRE_C_EXPORT NreErrorCode nreDestroyInstance(NreInstance instance);

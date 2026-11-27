@@ -13,19 +13,15 @@
 #include "scene/scene.h"
 
 namespace NRE {
-    struct Vertex {
-        glm::vec3 position{0.0f};
-        glm::vec3 normal{0.0f};
-        glm::vec2 uv{0.0f};
-        static VertexLayout layout() {
-            return {
-                {{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX}},
-                {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
-                 {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
-                 {2, 0, VK_FORMAT_R32G32_SFLOAT,    offsetof(Vertex, uv)}},
-            };
-        }
-    };
+    // Vertex is public (renderer.h) so createMeshModel() can take it; this is its pipeline layout.
+    inline VertexLayout vertexLayout() {
+        return {
+            {{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX}},
+            {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+             {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
+             {2, 0, VK_FORMAT_R32G32_SFLOAT,    offsetof(Vertex, uv)}},
+        };
+    }
     static_assert(sizeof(Vertex) == 32, "Vertex layout changed - update the pipeline");
     static_assert(std::is_standard_layout_v<Vertex>);
     struct Mesh {

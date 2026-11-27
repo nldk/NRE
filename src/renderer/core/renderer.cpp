@@ -723,7 +723,7 @@ namespace NRE {
     Result<Handel<Pipeline> > createPipeline(Handel<Shader> vertexShader, Handel<Shader> fragmentShader) {
         auto c = context();
         NRE_REQUIRE_CONTEXT(c);
-        return c->manager.create(Pipeline(vertexShader,fragmentShader,Vertex::layout()));
+        return c->manager.create(Pipeline(vertexShader,fragmentShader,vertexLayout()));
     }
     Result<void> destroyPipeline(Handel<Pipeline> pipeline) {
         auto c = context();
@@ -755,6 +755,63 @@ namespace NRE {
         }
         if (auto uploaded = model->uploadMeshes(); !uploaded) return std::unexpected(uploaded.error());
         return c->manager.create(std::move(*model));
+    }
+
+    Result<Handel<Model>> createMeshModel(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
+                                          Handel<Material> material) {
+        auto c = context();
+        NRE_REQUIRE_CONTEXT(c);
+#ifndef NDEBUG
+        {
+            std::string problem;
+            if (vertices.empty() || indices.empty()) problem = "the mesh is empty";
+            else if (indices.size() % 3 != 0) problem = std::to_string(indices.size()) + " indices isn't a whole number of triangles";
+            else if (auto big = std::ranges::max(indices); big >= vertices.size())
+                problem = "index " + std::to_string(big) + " is out of range (" + std::to_string(vertices.size()) + " vertices)";
+            if (!problem.empty()) {
+                auto error = Error{ErrorCode::InvalidArgument, "createMeshModel(): " + problem + "."};
+                ErrorHandeling::handleError(error);
+                return std::unexpected(error);
+            }
+            if (material != Handel<Material>{} && !c->manager.get(material)) {
+                auto error = ErrorHandeling::badHandle("material", material, "createMaterial()", std::source_location::current());
+                ErrorHandeling::handleError(error);
+                return std::unexpected(error);
+            }
+        }
+#endif
+        Mesh mesh;
+        mesh.vertices.assign(vertices.begin(), vertices.end());
+        mesh.indices.assign(indices.begin(), indices.end());
+        // Zero normals: sum the (area-weighted) normals of the triangles using the vertex. Only those vertices change.
+        std::vector<bool> needsNormal(mesh.vertices.size());
+        bool anyMissing = false;
+        for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+            needsNormal[i] = mesh.vertices[i].normal == glm::vec3(0.0f);
+            anyMissing = anyMissing || needsNormal[i];
+        }
+        if (anyMissing) {
+            for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+                const uint32_t a = mesh.indices[t], b = mesh.indices[t + 1], d = mesh.indices[t + 2];
+                const glm::vec3 faceNormal = glm::cross(mesh.vertices[b].position - mesh.vertices[a].position,
+                                                        mesh.vertices[d].position - mesh.vertices[a].position);
+                for (uint32_t v : {a, b, d}) if (needsNormal[v]) mesh.vertices[v].normal += faceNormal;
+            }
+            for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+                if (!needsNormal[i]) continue;
+                glm::vec3& n = mesh.vertices[i].normal;
+                n = glm::length(n) > 0.0f ? glm::normalize(n) : glm::vec3(0.0f, 1.0f, 0.0f);   // unused or degenerate
+            }
+        }
+        mesh.computeBounds();
+        Model model;
+        if (material != Handel<Material>{}) {
+            model.materials.push_back(material);
+            mesh.material = 0;
+        }
+        model.meshes.push_back(std::move(mesh));
+        if (auto uploaded = model.uploadMeshes(); !uploaded) return std::unexpected(uploaded.error());
+        return c->manager.create(std::move(model));
     }
 
     Result<void> destroyModel(Handel<Model> model) {
