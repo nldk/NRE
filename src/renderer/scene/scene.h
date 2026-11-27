@@ -89,6 +89,10 @@ namespace NRE {
         float shadowDistance{};
         // The sky without a skybox: the procedural atmosphere (Landscape) or the sky colour (Small).
         bool proceduralSky{};
+        // setHaze: the distance at which the haze hides about 95% (metres, 0 = no haze) and how thick its layer is
+        // (metres above y = 0, > 0).
+        float hazeVisibility{};
+        float hazeHeight = 300.0f;
         // Sun shadow cascades this frame (0 = none), set by writeFrameData() with their matrices; the shadow pass draws
         // this many.
         uint32_t shadowCascades = 0;
@@ -118,7 +122,8 @@ namespace NRE {
     };
 
     // Resets the scene's per-mode settings to the defaults of scene.lighting (setSceneLighting), and is how a new
-    // scene gets them: Small: shadows 20 m, the sky colour without a skybox; Landscape: shadows 500 m, the procedural
-    // sky without a skybox. The sun, lights, exposure, sky colour and skybox are kept.
+    // scene gets them: Small: shadows 20 m, no haze, the sky colour without a skybox; Landscape: shadows 500 m, haze
+    // visibility 8000 m (300 m thick), the procedural sky without a skybox. The sun, lights, exposure, sky colour and
+    // skybox are kept.
     void applyLightingDefaults(Scene& scene);
 }

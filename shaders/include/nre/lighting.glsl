@@ -61,7 +61,10 @@ vec3  nreSunRadiance();                           // sun colour x intensity x at
 vec3  nreLights(Surface s);                       // point + directional lights, unshadowed
 vec3  nreAmbient(Surface s);                      // sky diffuse + specular reflections
 vec3  nreBRDF(Surface s, vec3 toLight, vec3 radiance);   // GGX + Lambert, for your own lights
-vec3  nreApplyHaze(vec3 color, vec3 worldPos);
+vec3  nreApplyHaze(vec3 color, vec3 worldPos);    // distance haze between the camera and worldPos over color (the
+                                                  // light leaving that point). nreShade already applies it: when you
+                                                  // build from the pieces, call it once, last. Off (returns color)
+                                                  // when the scene has no haze (setHaze)
 vec3  nreCascadeDebugColor(vec3 worldPos);        // tints each cascade, for tuning: red, green, blue, yellow
                                                   // (white beyond the shadow distance). Multiply your colour by it
 
@@ -283,28 +286,82 @@ vec3 nre_hemisphere(vec3 dir, float blurWidth) {
     return mix(ground, sky, clamp(0.5 + 0.5 * dir.y / blurWidth, 0.0, 1.0));
 }
 
-// Image-based: the diffuse light from nreIrradiance, reflections from nreSpecular scaled by the split-sum BRDF from
-// nreBrdfLut (F0 * A + B). Without an IBL (skyParams.y 0: the sky colour) the same with the sky colour's hemisphere.
+// The sky's light arriving around dir: the cosine-weighted average of its radiance over dir's hemisphere. From the
+// IBL (nreIrradiance) when this frame's sky has one, otherwise the sky colour's hemisphere.
+vec3 nre_skyIrradiance(vec3 dir) {
+    return nreFrame.skyParams.y > 0.0 ? textureLod(nreIrradiance, dir, 0.0).rgb : nre_hemisphere(dir, 1.0);
+}
+
+// The sky seen along dir, blurred as a GGX surface of that perceptual roughness (0..1) reflects it. From the IBL
+// (nreSpecular) when this frame's sky has one, otherwise the sky colour's hemisphere.
+vec3 nre_skyReflection(vec3 dir, float roughness) {
+    float specularMips = nreFrame.skyParams.y;
+    return specularMips > 0.0 ? textureLod(nreSpecular, dir, roughness * (specularMips - 1.0)).rgb
+                              : nre_hemisphere(dir, max(nre_alphaRoughness(roughness), 0.02));
+}
+
+// Image-based: the diffuse light from the sky's irradiance, reflections from the prefiltered sky scaled by the
+// split-sum BRDF from nreBrdfLut (F0 * A + B). Without an IBL (skyParams.y 0: the sky colour) the same with the sky
+// colour's hemisphere.
 vec3 nreAmbient(Surface s) {
     vec3 N = s.normal;
     vec3 R = reflect(-s.view, N);
     float NdotV = max(dot(N, s.view), 1e-4);
     float roughness = clamp(s.roughness, 0.0, 1.0);
     vec2 env = textureLod(nreBrdfLut, vec2(NdotV, roughness), 0.0).rg;
-    float specularMips = nreFrame.skyParams.y;
-    vec3 irradiance, reflected;
-    if (specularMips > 0.0) {
-        irradiance = textureLod(nreIrradiance, N, 0.0).rgb;
-        reflected = textureLod(nreSpecular, R, roughness * (specularMips - 1.0)).rgb;
-    } else {
-        irradiance = nre_hemisphere(N, 1.0);
-        reflected = nre_hemisphere(R, max(nre_alphaRoughness(roughness), 0.02));
-    }
-    return s.albedo * (1.0 - s.metallic) * irradiance + reflected * (nre_F0(s) * env.x + env.y);
+    return s.albedo * (1.0 - s.metallic) * nre_skyIrradiance(N) + nre_skyReflection(R, roughness) * (nre_F0(s) * env.x + env.y);
+}
+
+// ---- Haze ----
+// A layer of haze whose extinction is nreFrame.hazeParams.x per metre at y = 0 and below, and falls off as
+// exp(-y / height) above (hazeParams.y = 1 / height), integrated analytically along the view ray. The light it
+// scatters toward the camera: the sky in the view's direction, no lower than just above the horizon (a deep layer of
+// haze looks like the horizon sky behind it, so far terrain fades into the horizon's colour), plus the sun's light
+// through a forward Henyey-Greenstein lobe (brighter and in the sun's colour toward the sun).
+
+const float NRE_HAZE_FORWARD = 0.75;   // Henyey-Greenstein g: how strongly the haze scatters forward
+
+// Optical depth from the camera to a point dist metres away. Heights below 0 count as 0 (the densest haze).
+float nre_hazeOpticalDepth(float cameraY, float pointY, float dist) {
+    float a = max(cameraY, 0.0) * nreFrame.hazeParams.y, b = max(pointY, 0.0) * nreFrame.hazeParams.y;
+    // The mean of exp(-h) between the two heights (in units of the layer's height); its midpoint value when they
+    // are close (the difference of the two exponentials would lose its precision there).
+    float mean = abs(b - a) < 1e-2 ? exp(-0.5 * (a + b)) : (exp(-a) - exp(-b)) / (b - a);
+    return nreFrame.hazeParams.x * dist * mean;
+}
+
+// The light the haze scatters toward the camera along dir (unit, from the camera), once it's thick enough to hide
+// everything behind it.
+vec3 nre_hazeColor(vec3 dir) {
+    const float g = NRE_HAZE_FORWARD;
+    float cosTheta = dot(dir, nreSunToLight());
+    float phase = (1.0 - g * g) / (4.0 * NRE_PI * pow(max(1.0 + g * g - 2.0 * g * cosTheta, 1e-4), 1.5));
+    // At least about 1 degree up: the sharp sky, clear of the horizon's edge in the cubemap. Not the sky below the
+    // horizon (the procedural sky's empty-world ground, a skybox's bottom), nor a blurred lobe reaching into it: those
+    // would put a dark band along the horizon.
+    vec3 lifted = normalize(vec3(dir.x, max(dir.y, 0.02), dir.z));
+    return nre_skyReflection(lifted, 0.0) + phase * nreSunRadiance();
+}
+
+// How much of the sky along dir shows through the haze (sky.frag, procedural sky only). The sky is infinitely far,
+// so at the horizon (and below it) the haze hides it completely, which is where far terrain fades to as well: the
+// two meet without a seam. The procedural sky already holds the clear atmosphere overhead, so the depth is counted
+// relative to the zenith's: from 1 straight up to 0 at the horizon.
+float nre_hazeSkyTransmittance(vec3 dir) {
+    if (nreFrame.hazeParams.x <= 0.0) return 1.0;
+    if (dir.y <= 0.0) return 0.0;
+    float height = 1.0 / nreFrame.hazeParams.y;
+    float zenithDepth = nreFrame.hazeParams.x * height * exp(-max(nreFrame.cameraPos.y, 0.0) * nreFrame.hazeParams.y);
+    return exp(-zenithDepth * (1.0 / dir.y - 1.0));
 }
 
 vec3 nreApplyHaze(vec3 color, vec3 worldPos) {
-    return color;
+    if (nreFrame.hazeParams.x <= 0.0) return color;
+    vec3 toPoint = worldPos - nreFrame.cameraPos.xyz;
+    float dist = length(toPoint);
+    if (dist <= 0.0) return color;
+    float transmittance = exp(-nre_hazeOpticalDepth(nreFrame.cameraPos.y, worldPos.y, dist));
+    return mix(nre_hazeColor(toPoint / dist), color, transmittance);
 }
 
 vec3 nreCascadeDebugColor(vec3 worldPos) {

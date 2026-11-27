@@ -1072,6 +1072,23 @@ namespace NRE {
         return {};
     }
 
+    Result<void> setHaze(float visibility, float height) {
+        auto s = getBoundScenePtr();
+        if (!s) return std::unexpected(s.error());
+#ifndef NDEBUG
+        if (!(visibility >= 0.0f) || !(height > 0.0f)) {   // also catches NaN
+            auto error = Error{ErrorCode::InvalidArgument, "setHaze(): the visibility must not be negative and the height must be "
+                               "greater than 0, got visibility " + std::to_string(visibility) + ", height " + std::to_string(height)
+                               + ". Visibility 0 turns the haze off; the defaults are off (Small) / 8000 m, 300 m high (Landscape)."};
+            ErrorHandeling::handleError(error);
+            return std::unexpected(error);
+        }
+#endif
+        (*s)->hazeVisibility = visibility;
+        (*s)->hazeHeight = height;
+        return {};
+    }
+
     Result<void> setExposure(float exposure) {
         auto s = getBoundScenePtr();
         if (!s) return std::unexpected(s.error());

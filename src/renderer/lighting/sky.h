@@ -58,8 +58,9 @@ namespace NRE {
         // intensity / 3 (0: night floor only). True when it recomputed them.
         bool update(VkCommandBuffer commandBuffer, glm::vec3 sunDirection, float brightness);
         // The sky behind what the main pass drew so far, for the scene's sky source this frame (writeFrameData):
-        // cubemap or procedural; nothing for the plain colour (the clear colour is the sky then). Binds its pipeline
-        // and the scene's set 0. Inside the main pass, Render_3D only.
+        // cubemap or procedural; nothing for the plain colour (the clear colour is the sky then). The procedural sky
+        // gets the scene's haze near the horizon (sky.frag), so far terrain meets it without a seam; a cubemap is shown
+        // as authored. Binds its pipeline and the scene's set 0. Inside the main pass, Render_3D only.
         void draw(VkCommandBuffer commandBuffer, Scene& scene);
         // This frame slot's sky cubemap (what set 0 binding 2 shows in procedural mode).
         VkImageView cubemapView() const;

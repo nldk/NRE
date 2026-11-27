@@ -70,6 +70,7 @@ NRE_FUNCTION(Result<void>, setSceneLighting, (SceneLighting lighting), (lighting
 NRE_FUNCTION(Result<SceneLighting>, getSceneLighting, (), ())
 NRE_FUNCTION(Result<void>, setShadowDistance, (float meters), (meters))
 NRE_FUNCTION(Result<void>, setCastsShadows, (Handel<Instance> instance, bool castsShadows), (instance, castsShadows))
+NRE_FUNCTION(Result<void>, setHaze, (float visibility, float height), (visibility, height))
 NRE_FUNCTION(Result<void>, setExposure, (float exposure), (exposure))
 NRE_FUNCTION(Result<void>, setSkyColor, (glm::vec3 color), (color))
 NRE_FUNCTION(Result<Handel<Cubemap>>, createCubemap, (std::string right, std::string left, std::string top, std::string bottom, std::string front, std::string back), (std::move(right), std::move(left), std::move(top), std::move(bottom), std::move(front), std::move(back)))

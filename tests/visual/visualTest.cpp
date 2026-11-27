@@ -710,11 +710,13 @@ NRE_SCENARIO(shadow_stable) {
 }
 
 // Landscape: a long wall's shadow runs from near the camera through every cascade border without a gap or a
-// lighter band where the cascades blend.
+// lighter band where the cascades blend. Without haze: it lowers the contrast with distance by design, which would
+// blur what this measures.
 NRE_SCENARIO(shadow_cascade_borders) {
     Session session(ApiMode::SceneMode);
     bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
     TRY(setSceneLighting(SceneLighting::Landscape));
+    TRY(setHaze(0.0f));
     auto box = TRY(createModel(ASSET_DIR "/Box.glb"));
     auto ground = TRY(createInstance(box));
     TRY(setInstanceTransform(ground, Transform{{0.0f, -0.5f, 0.0f}, glm::identity<glm::quat>(), {2000.0f, 1.0f, 2000.0f}}));
@@ -1209,6 +1211,201 @@ NRE_SCENARIO(sky_sunset_smooth) {
     }
     std::printf("largest mean change between frames 0.02 degrees apart: %.2f/255 (at %+.2f degrees)\n", worst * 255.0f, worstAt);
     CHECK(worst <= 1.0f / 255.0f);
+    return true;
+}
+
+// ---- Distance haze ----
+
+namespace {
+    // The haze scenes: Landscape (haze visibility 8 km, 300 m thick, the defaults), the sun elevationDeg up at
+    // azimuthDeg (180: behind the camera, lighting the boxes' camera-facing +z faces), the camera 10 m up looking
+    // down -z with pitch 0 (the horizon is between rows 239 and 240). Returns Box.glb (red, 1 m).
+    Handel<Model> setUpHazeScene(float elevationDeg = 60.0f, float azimuthDeg = 180.0f) {
+        bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+        TRY(setSceneLighting(SceneLighting::Landscape));
+        TRY(setSun(sunAt(elevationDeg, azimuthDeg), glm::vec3(1.0f), 3.0f));
+        TRY(setCameraPosition({0.0f, 10.0f, 0.0f}));
+        TRY(setCameraRotation(0.0f, 0.0f));
+        return TRY(createModel(ASSET_DIR "/Box.glb"));
+    }
+
+    void addScaledBox(Handel<Model> model, glm::vec3 position, glm::vec3 scale) {
+        auto box = TRY(createInstance(model));
+        TRY(setInstanceTransform(box, Transform{position, glm::identity<glm::quat>(), scale}));
+        TRY(addInstanceToScene(box));
+    }
+
+    // The haze-far scene: a 20 m box 6 km ahead, its middle on the view axis, and a 4 m box 50 m ahead, off to the left.
+    void addFarAndNearBoxes(Handel<Model> box) {
+        addScaledBox(box, {0.0f, 10.0f, -6000.0f}, glm::vec3(20.0f));
+        addScaledBox(box, {-15.0f, 10.0f, -50.0f}, glm::vec3(4.0f));
+    }
+
+    // At 6 km the far box is about 1.5 px across: the 2 x 2 px at the view's centre.
+    glm::vec3 farBox(const Image& image) { return image.average(319, 239, 321, 241); }
+    // The sky right above the horizon, 20 px to the right of the far box.
+    glm::vec3 skyBesideFarBox(const Image& image) { return image.average(340, 237, 345, 239); }
+    glm::vec3 nearBox(const Image& image) {
+        glm::vec2 p = toPixel({-15.0f, 10.0f, -48.0f});
+        return image.average(uint32_t(p.x) - 3, uint32_t(p.y) - 3, uint32_t(p.x) + 4, uint32_t(p.y) + 4);
+    }
+
+    float maxChannelDifference(glm::vec3 a, glm::vec3 b) {
+        glm::vec3 d = glm::abs(a - b);
+        return std::max({d.x, d.y, d.z});
+    }
+
+    void printColor(const char* label, glm::vec3 c) { std::printf("%s (%.3f, %.3f, %.3f)\n", label, c.r, c.g, c.b); }
+}
+
+// Landscape at noon: a red box 6 km away has faded into the horizon's haze; one 50 m away keeps its colour.
+NRE_SCENARIO(haze_far) {
+    Session session(ApiMode::SceneMode);
+    addFarAndNearBoxes(setUpHazeScene());
+    Image image = renderAndCapture();
+    saveCapture(image, "haze-far.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 far = farBox(image), sky = skyBesideFarBox(image), near50 = nearBox(image);
+    printColor("far box", far);
+    printColor("sky beside it", sky);
+    printColor("near box", near50);
+    CHECK(maxChannelDifference(far, sky) < 0.08f);
+    CHECK(maxChannelDifference(near50, sky) >= 0.08f);
+    CHECK(near50.r > near50.g + 0.2f);   // still red
+    return true;
+}
+
+// setHaze(0) turns it off: the far box shows red against the sky. setSceneLighting brings the mode's haze back.
+NRE_SCENARIO(haze_off) {
+    Session session(ApiMode::SceneMode);
+    addFarAndNearBoxes(setUpHazeScene());
+    TRY(setHaze(0.0f));
+    Image off = renderAndCapture();
+    saveCapture(off, "haze-off.png");
+    CHECK(!off.pixels.empty());
+    glm::vec3 far = farBox(off), sky = skyBesideFarBox(off);
+    printColor("no haze: far box", far);
+    printColor("no haze: sky beside it", sky);
+    CHECK(maxChannelDifference(far, sky) > 0.15f);
+#ifndef NDEBUG
+    CHECK(!setHaze(-1.0f));
+    CHECK(!setHaze(8000.0f, 0.0f));
+    CHECK(!setHaze(8000.0f, -300.0f));
+#endif
+    TRY(setSceneLighting(SceneLighting::Landscape));
+    Image reset = renderAndCapture();
+    CHECK(!reset.pixels.empty());
+    printColor("after setSceneLighting: far box", farBox(reset));
+    CHECK(maxChannelDifference(farBox(reset), skyBesideFarBox(reset)) < 0.08f);
+    return true;
+}
+
+// The haze thins out with height: a box on a 600 m pillar 4 km away is less hazed than the pillar's foot.
+NRE_SCENARIO(haze_height) {
+    Session session(ApiMode::SceneMode);
+    Handel<Model> box = setUpHazeScene();
+    addScaledBox(box, {0.0f, 300.0f, -4000.0f}, {60.0f, 600.0f, 60.0f});
+    addScaledBox(box, {0.0f, 630.0f, -4000.0f}, glm::vec3(60.0f));
+    Image image = renderAndCapture();
+    saveCapture(image, "haze-height.png");
+    CHECK(!image.pixels.empty());
+    auto at = [&](glm::vec3 world) {
+        glm::vec2 p = toPixel(world);
+        return image.average(uint32_t(p.x) - 1, uint32_t(p.y) - 1, uint32_t(p.x) + 2, uint32_t(p.y) + 2);
+    };
+    // Both on the camera-facing face. At the horizon (beside the foot) the sky is all haze.
+    glm::vec3 top = at({0.0f, 630.0f, -3970.0f}), foot = at({0.0f, 40.0f, -3970.0f});
+    glm::vec3 haze = image.average(360, 237, 365, 239);
+    printColor("box on top", top);
+    printColor("pillar's foot", foot);
+    printColor("haze at the horizon", haze);
+    CHECK(maxChannelDifference(top, haze) > maxChannelDifference(foot, haze) + 0.05f);
+    CHECK(top.r - top.b > foot.r - foot.b + 0.05f);   // redder: more of the box shows through
+    return true;
+}
+
+// Terrain meets the sky without a seam: a 40 km red ground seen from 200 m up at noon. Its far edge (about 18 km away,
+// rows 244 and 245) and the sky right above the horizon (rows 237 and 238) look the same.
+NRE_SCENARIO(haze_horizon_seam) {
+    Session session(ApiMode::SceneMode);
+    Handel<Model> box = setUpHazeScene();
+    addScaledBox(box, {0.0f, -0.5f, 0.0f}, {40000.0f, 1.0f, 40000.0f});
+    TRY(setCameraPosition({0.0f, 200.0f, 0.0f}));
+    Image image = renderAndCapture();
+    saveCapture(image, "haze-horizon-seam.png");
+    CHECK(!image.pixels.empty());
+    glm::vec3 ground = image.average(220, 244, 420, 246), sky = image.average(220, 237, 420, 239);
+    glm::vec3 nearGround = image.average(220, 400, 420, 410);   // about 1 km away: still red
+    printColor("ground at its far edge", ground);
+    printColor("sky above the horizon", sky);
+    printColor("ground 1 km away", nearGround);
+    CHECK(maxChannelDifference(ground, sky) < 0.05f);
+    CHECK(nearGround.r > nearGround.b + 0.1f);
+    return true;
+}
+
+// Golden hour, the sun 5 degrees up: far ground fades into the haze, which is brighter toward the sun. A white 40 km
+// ground; the camera 50 m up faces the sun, then turns away. (Its hue follows the sky's horizon, which at this height
+// of the sun is as orange away from the sun as toward it; haze_sun_lobe checks the sun's warm lobe on its own.)
+NRE_SCENARIO(haze_golden_hour) {
+    Session session(ApiMode::SceneMode);
+    setUpHazeScene(5.0f, 0.0f);
+    auto cube = TRY(createModel(TEST_ASSET_DIR "/noUv.obj"));   // no material: white
+    addScaledBox(cube, {0.0f, -0.05f, 0.0f}, {40000.0f, 0.1f, 40000.0f});
+    TRY(setCameraPosition({0.0f, 50.0f, 0.0f}));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    Image toward = renderAndCapture();
+    TRY(setCameraRotation(3.14159265f, 0.0f));   // yaw in radians: facing +z
+    Image away = renderAndCapture();
+    saveCapture(toward, "haze-golden-hour-toward.png");
+    saveCapture(away, "haze-golden-hour-away.png");
+    CHECK(!toward.pixels.empty() && !away.pixels.empty());
+    // The ground 8 to 14 km away (rows 241 and 242), right of the sun's column (the disk is above the horizon at the
+    // centre): it has faded into the haze, the sky right above the horizon (rows 237 and 238).
+    glm::vec3 t = toward.average(400, 241, 600, 243), a = away.average(400, 241, 600, 243);
+    glm::vec3 skyT = toward.average(400, 237, 600, 239), skyA = away.average(400, 237, 600, 239);
+    printColor("far ground toward the sun", t);
+    printColor("sky above it", skyT);
+    printColor("far ground away from the sun", a);
+    printColor("sky above it", skyA);
+    CHECK(maxChannelDifference(t, skyT) < 0.08f && maxChannelDifference(a, skyA) < 0.08f);
+    // A quarter as bright, so the sunward side isn't pushed to white by the tone curve.
+    TRY(setExposure(0.25f));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    t = renderAndCapture().average(400, 241, 600, 243);
+    TRY(setCameraRotation(3.14159265f, 0.0f));
+    a = renderAndCapture().average(400, 241, 600, 243);
+    printColor("at exposure 0.25: far ground toward the sun", t);
+    printColor("at exposure 0.25: far ground away from the sun", a);
+    CHECK(luminance(t) > 1.2f * luminance(a));
+    return true;
+}
+
+// The haze's forward lobe on its own: Small, with haze, a grey sky colour and an orange sun 5 degrees up. A white box
+// 4 km toward the sun takes on the sun's colour; one 4 km away from it fades into the plain sky colour.
+NRE_SCENARIO(haze_sun_lobe) {
+    Session session(ApiMode::SceneMode);
+    bindExamplePipeline("vertex.vert.spv", "fragment.frag.spv");
+    TRY(setHaze(2000.0f));
+    TRY(setSkyColor(glm::vec3(0.5f)));
+    TRY(setSun(sunAt(5.0f), glm::vec3(1.0f, 0.55f, 0.25f), 0.5f));   // dim, so the lobe isn't mapped to white
+    auto cube = TRY(createModel(TEST_ASSET_DIR "/noUv.obj"));   // no material: white
+    addScaledBox(cube, {0.0f, 10.0f, -4000.0f}, glm::vec3(40.0f));
+    addScaledBox(cube, {0.0f, 10.0f, 4000.0f}, glm::vec3(40.0f));
+    TRY(setCameraPosition({0.0f, 10.0f, 0.0f}));
+    TRY(setCameraRotation(0.0f, 0.0f));
+    Image toward = renderAndCapture();
+    TRY(setCameraRotation(3.14159265f, 0.0f));
+    Image away = renderAndCapture();
+    saveCapture(toward, "haze-sun-lobe-toward.png");
+    saveCapture(away, "haze-sun-lobe-away.png");
+    CHECK(!toward.pixels.empty() && !away.pixels.empty());
+    // Each box is about 4 px across, at the view's centre.
+    glm::vec3 t = toward.average(319, 239, 321, 241), a = away.average(319, 239, 321, 241);
+    printColor("box toward the sun", t);
+    printColor("box away from the sun", a);
+    CHECK(t.r > t.b + 0.05f);   // the plain grey sky would give r = b
+    CHECK(near(a, glm::vec3(srgbEncode(0.5f)), 0.05f));   // the sky colour, as the background shows it
     return true;
 }
 

@@ -330,6 +330,15 @@ namespace NRE {
     // drawModel() always casts.
     RENDERER_API Result<void> setCastsShadows(Handel<Instance> instance, bool castsShadows);
 
+    // Distance haze (aerial perspective) on the bound scene: far things fade into the sky's colour, warmer toward the
+    // sun. visibility: metres at which the haze hides almost everything (about 95%); 0 turns it off. height: how thick
+    // the haze layer is; it thins out above that height (metres above y = 0), so mountain tops poke out of valley
+    // haze. Must not be negative (visibility) / must be greater than 0 (height). Default off (Small) / 8000 m, 300 m
+    // (Landscape); setSceneLighting resets it. nreShade applies it (nreApplyHaze in nre/lighting.glsl, for shaders
+    // built from the pieces). The procedural sky gets the same haze near the horizon, so terrain and sky meet without
+    // a seam; a skybox is shown as authored (a photo sky already has its own haze).
+    RENDERER_API Result<void> setHaze(float visibility, float height = 300.0f);
+
     // Tone mapping. Shaders write linear light (values above 1 are fine, and must not tone map themselves);
     // at the end of the frame the renderer multiplies it by the exposure and maps it to the screen with the
     // ACES curve. Render_2D isn't tone mapped: what the shaders write is what's shown.

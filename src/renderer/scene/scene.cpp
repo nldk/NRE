@@ -27,10 +27,14 @@ namespace NRE {
             case SceneLighting::Small:
                 scene.shadowDistance = 20.0f;
                 scene.proceduralSky = false;
+                scene.hazeVisibility = 0.0f;
+                scene.hazeHeight = 300.0f;
                 break;
             case SceneLighting::Landscape:
                 scene.shadowDistance = 500.0f;
                 scene.proceduralSky = true;
+                scene.hazeVisibility = 8000.0f;
+                scene.hazeHeight = 300.0f;
                 break;
         }
     }
@@ -113,7 +117,9 @@ namespace NRE {
         else if (skySource == SkySource::Cubemap) ibl = c->manager.get(sky)->getIbl();
         if (ibl && !ibl->ready()) ibl = nullptr;
         fd.skyParams = glm::vec4(float(uint32_t(skySource)), ibl ? float(ibl->specularMips()) : 0.0f, skyBrightness, 0.0f);
-        fd.hazeParams = glm::vec4(0.0f);
+        // Haze (nreApplyHaze, and the procedural sky's horizon in sky.frag): extinction per metre at y = 0 and below,
+        // thinning out exponentially above it (1 / e per hazeHeight).
+        fd.hazeParams = glm::vec4(LightingMath::hazeDensityForVisibility(hazeVisibility), 1.0f / hazeHeight, 0.0f, 0.0f);
         if (auto r = UBO.write(frame, &fd, sizeof(fd)); !r) return r;
 
         // The caller waited on this frame's fence, so its set is free to rewrite. The procedural sky of frame slot f
