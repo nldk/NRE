@@ -196,6 +196,9 @@ namespace NRE {
         glm::vec3 normal{0.0f};   // all zero: createMeshModel computes it from the triangles around the vertex
         glm::vec2 uv{0.0f};
     };
+    // Passed as arrays across the library boundary (and to the C API): an app built with glm options that change
+    // vec3's size (GLM_FORCE_DEFAULT_ALIGNED_GENTYPES) must fail here rather than hand over the wrong layout.
+    static_assert(sizeof(Vertex) == 32, "NRE::Vertex must be 32 bytes: don't build with GLM_FORCE_DEFAULT_ALIGNED_GENTYPES");
 
     struct Instance;
     // Where pickInstance() hit: the instance, the distance from the camera along the ray (world units) and the
@@ -244,6 +247,7 @@ namespace NRE {
     // indices into vertices. Vertices whose normal is all zero get one computed from the triangles that use them
     // (area-weighted), so procedural meshes can skip normals. An empty material uses the default one. Draw it through
     // instances like a loaded model; shadows, picking and destroyModel() work the same. The geometry is copied.
+    // Without a material the model has no material slots: change it with setModelMaterial(), not replaceModelMaterial().
     RENDERER_API Result<Handel<Model>> createMeshModel(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
                                                        Handel<Material> material = {});
     // Instances of a destroyed model stay valid but draw nothing.

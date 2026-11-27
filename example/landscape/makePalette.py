@@ -2,7 +2,7 @@
 #   Rows 0..191:   terrain. u = height (-30 m .. 700 m), v = slope (flat at the top, steep at row 191).
 #   Rows 192..255: solid swatches, a quarter of the width each, 32 px tall:
 #     row 192: dark foliage | light foliage | bark | rock
-#     row 224: water        | (spare)       | (spare) | (spare)
+#     row 224: water        | (spare, neutral grey ×3)
 # Run: python3 example/landscape/makePalette.py   (keep in sync with world.cpp's height range and swatch UVs)
 import os
 import numpy as np
@@ -34,7 +34,8 @@ for x in range(W):
         img[y, x] = c
 
 swatches = {(0, 192): (34, 70, 32), (1, 192): (58, 98, 40), (2, 192): (92, 64, 44),
-            (3, 192): (128, 124, 118), (0, 224): (40, 78, 104)}
+            (3, 192): (128, 124, 118), (0, 224): (40, 78, 104),
+            (1, 224): (110, 106, 100), (2, 224): (110, 106, 100), (3, 224): (110, 106, 100)}   # spare: neutral
 for (col, row), c in swatches.items():
     img[row:row + 32, col * W // 4:(col + 1) * W // 4] = c
 

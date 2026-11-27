@@ -36,35 +36,35 @@ namespace {
             }
             (void)setCameraRotation(yaw, pitch);
 
+            // W/S along the view, A/D sideways, Space/C straight up/down (world Y, whatever the pitch).
+            const glm::vec3 forward = getCameraForward().value();
+            const glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
             glm::vec3 move(0.0f);
-            if (isKeyDown(Key::W).value()) move.z += 1.0f;
-            if (isKeyDown(Key::S).value()) move.z -= 1.0f;
-            if (isKeyDown(Key::D).value()) move.x += 1.0f;
-            if (isKeyDown(Key::A).value()) move.x -= 1.0f;
+            if (isKeyDown(Key::W).value()) move += forward;
+            if (isKeyDown(Key::S).value()) move -= forward;
+            if (isKeyDown(Key::D).value()) move += right;
+            if (isKeyDown(Key::A).value()) move -= right;
             if (isKeyDown(Key::Space).value()) move.y += 1.0f;
             if (isKeyDown(Key::C).value()) move.y -= 1.0f;
             float speed = isKeyDown(Key::LeftShift).value() ? 400.0f : 50.0f;
-            if (glm::length(move) > 0.0f) {
-                (void)setCameraPosition(position);
-                (void)moveCameraRelative(glm::normalize(move) * speed * dt);
-                position = getCameraPosition().value();
-            }
+            if (glm::length(move) > 0.0f) position += glm::normalize(move) * speed * dt;
             // Never below the ground or the water, never off the edge of the world.
             const float edge = Landscape::worldSize * 0.5f - 10.0f;
             position.x = std::clamp(position.x, -edge, edge);
             position.z = std::clamp(position.z, -edge, edge);
-            float floor = std::max(Landscape::terrainHeight(position.x, position.z), Landscape::waterLevel) + 2.0f;
+            float floor = std::max(Landscape::groundHeight(position.x, position.z), Landscape::waterLevel) + 2.0f;
             position.y = std::max(position.y, floor);
             (void)setCameraPosition(position);
         }
     };
 
-    // Time of day in hours → the way the sunlight travels. Sunrise at 6:00 in the east, sunset at 18:00 in the
-    // west, at most 60° high at noon (and as low at midnight, below the horizon).
+    // Time of day in hours → the way the sunlight travels. Sunrise at 6:00 in the east (+x), sunset at 18:00 in the
+    // west, about 68° high at noon in the south (+z, behind the start view, so the mountains are lit from the front),
+    // as far below the horizon at midnight.
     glm::vec3 sunDirection(float hours) {
         const float pi = std::numbers::pi_v<float>;
         float angle = (hours - 6.0f) / 24.0f * 2.0f * pi;          // 0 at sunrise, pi at sunset
-        glm::vec3 toSun(std::cos(angle), std::sin(angle) * std::sin(pi / 3.0f), -0.35f);
+        glm::vec3 toSun(std::cos(angle), std::sin(angle) * std::sin(pi / 3.0f), 0.35f);
         return -glm::normalize(toSun);
     }
 
@@ -72,7 +72,7 @@ namespace {
         return createMeshModel(mesh.vertices, mesh.indices, material).value();
     }
 
-    void addInstances(Handel<Model> model, std::span<const Landscape::Placement> placements) {
+    void addInstances(Handel<Model> model, std::span<const Landscape::Placement> placements, bool castsShadows = true) {
         for (const Landscape::Placement& p : placements) {
             Handel<Instance> instance = createInstance(model).value();
             Transform t;
@@ -80,6 +80,7 @@ namespace {
             t.rotation = glm::angleAxis(p.yaw, glm::vec3(0.0f, 1.0f, 0.0f));
             t.scale = glm::vec3(p.scale);
             (void)setInstanceTransform(instance, t);
+            (void)setCastsShadows(instance, castsShadows);
             (void)addInstanceToScene(instance);
         }
     }
@@ -99,8 +100,9 @@ int main() {
     auto palette = createMaterial(createTexture(LANDSCAPE_DIR "/palette.png").value()).value();
 
     std::puts("Building the world...");
-    (void)addInstanceToScene(createInstance(meshModel(Landscape::makeTerrain(513), palette)).value());
-    (void)addInstanceToScene(createInstance(meshModel(Landscape::makeWater(), palette)).value());
+    const Landscape::Placement origin{glm::vec3(0.0f), 0.0f, 1.0f};
+    addInstances(meshModel(Landscape::makeTerrain(), palette), {&origin, 1});
+    addInstances(meshModel(Landscape::makeWater(), palette), {&origin, 1}, false);   // flat water casts nothing
     auto trees = Landscape::placeTrees(5000, 7);
     addInstances(meshModel(Landscape::makeTree(), palette), trees);
     auto rocks = Landscape::placeRocks(240, 11);
@@ -118,11 +120,16 @@ int main() {
     bool haze = true, landscape = true;
 
     FlyCamera camera;
-    float secondsSincePrint = 0.0f;
+    // NRE_LANDSCAPE_SECONDS=N quits after N seconds, for timing runs. The frame rate is printed every 2 s.
+    const char* limitText = std::getenv("NRE_LANDSCAPE_SECONDS");
+    const float limit = limitText ? float(std::atof(limitText)) : 0.0f;
+    float secondsSincePrint = 0.0f, elapsed = 0.0f;
+    bool firstFrame = true;     // its delta time includes building the world
     while (!windowShouldClose().value()) {
         (void)pollEvents();
         if (isKeyPressed(Key::Escape).value()) break;
-        float dt = getDeltaTime().value();
+        float dt = firstFrame ? 0.0f : getDeltaTime().value();
+        firstFrame = false;
 
         camera.update(dt);
         float hoursPerSecond = isKeyDown(Key::LeftShift).value() ? 6.0f : 1.0f;
@@ -138,7 +145,7 @@ int main() {
         if (isKeyPressed(Key::L).value()) {
             landscape = !landscape;
             (void)setSceneLighting(landscape ? SceneLighting::Landscape : SceneLighting::Small);
-            if (landscape && !haze) (void)setHaze(0.0f);      // setSceneLighting resets haze to the mode's default
+            (void)setHaze(haze ? 8000.0f : 0.0f);       // setSceneLighting resets haze to the mode's default
             std::printf("%s lighting\n", landscape ? "Landscape" : "Small");
         }
         if (isKeyPressed(Key::T).value() || isKeyPressed(Key::G).value()) {
@@ -146,17 +153,14 @@ int main() {
         }
 
         (void)renderFrame();
-        // NRE_LANDSCAPE_SECONDS=N: quit after N seconds (for timing runs); prints the frame rate every 2 s.
         secondsSincePrint += dt;
         if (secondsSincePrint >= 2.0f) {
             secondsSincePrint = 0.0f;
             float fps = getFPS().value();
             std::printf("%.0f fps (%.2f ms)\n", fps, 1000.0f / fps);
         }
-        static const char* limit = std::getenv("NRE_LANDSCAPE_SECONDS");
-        static float elapsed = 0.0f;
         elapsed += dt;
-        if (limit && elapsed > std::atof(limit)) break;
+        if (limitText && elapsed > limit) break;
     }
     (void)shutdown();
     return 0;

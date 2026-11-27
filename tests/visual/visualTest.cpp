@@ -1518,7 +1518,6 @@ namespace {
     bool nearF(float a, float b, float relative) { return std::fabs(a - b) <= relative * std::max(1.0f, std::fabs(b)); }
 }
 
-// Two boxes side by side, 4 m ahead: picking at each one's projected centre finds it, on its front face.
 // createMeshModel: a 2x2 quad built in code, 3 m in front of the camera, lit head-on by the sun.
 // Zero normals must be computed to the same result as explicit ones; clockwise triangles are back faces (culled);
 // the mesh is pickable like a loaded model; bad indices are misuse (reported in Debug).
@@ -1546,7 +1545,8 @@ NRE_SCENARIO(mesh_model) {
     };
     Image computed = show(TRY(createMeshModel(quad(glm::vec3(0.0f)), ccw)));
     Image given = show(TRY(createMeshModel(quad(glm::vec3(0.0f, 0.0f, 1.0f)), ccw)));
-    Image backFace = show(TRY(createMeshModel(quad(glm::vec3(0.0f)), cw)));
+    // Explicit +Z normal: if the clockwise quad weren't culled it would be lit (head-on), not black.
+    Image backFace = show(TRY(createMeshModel(quad(glm::vec3(0.0f, 0.0f, 1.0f)), cw)));
     saveCapture(computed, "mesh-model.png");
     const glm::vec3 lit = computed.at(centre.x, centre.y), background = backFace.at(centre.x, centre.y);
     CHECK(luminance(lit) > 0.2f);
@@ -1567,7 +1567,7 @@ NRE_SCENARIO(mesh_model) {
     return true;
 }
 
-// The landscape demo's world (example/landscape) at noon, golden hour and dusk, from the demo's start view.
+// The landscape demo's world (example/landscape) at noon, golden hour and dusk, from (10 m above) the demo's start view.
 // Saves landscape-<time>.png to NRE_TEST_OUT. Checks only that it renders sensibly: sky above, lit ground below,
 // golden hour warmer than noon, dusk darker; the pictures are for looking at.
 NRE_SCENARIO(landscape_demo) {
@@ -1583,13 +1583,13 @@ NRE_SCENARIO(landscape_demo) {
         }
     };
     const Landscape::Placement origin{glm::vec3(0.0f), 0.0f, 1.0f};
-    add(Landscape::makeTerrain(513), {&origin, 1});
+    add(Landscape::makeTerrain(), {&origin, 1});
     add(Landscape::makeWater(), {&origin, 1});
     add(Landscape::makeTree(), Landscape::placeTrees(5000, 7));
     add(Landscape::makeRock(1), Landscape::placeRocks(240, 11));
     TRY(setSceneLighting(SceneLighting::Landscape));
     glm::vec3 eye(-600.0f, 0.0f, 1400.0f);
-    eye.y = std::max(Landscape::terrainHeight(eye.x, eye.z), Landscape::waterLevel) + 12.0f;
+    eye.y = std::max(Landscape::groundHeight(eye.x, eye.z), Landscape::waterLevel) + 12.0f;   // 10 m above the demo's start
     TRY(setCameraPosition(eye));
     TRY(setCameraRotation(0.8f, 0.05f));
     auto at = [&](float elevationDeg, const char* name) {
@@ -1603,7 +1603,7 @@ NRE_SCENARIO(landscape_demo) {
     Image noon = at(55.0f, "noon"), golden = at(8.0f, "golden-hour"), dusk = at(-3.0f, "dusk");
     // And up in the mountains (north), for the rock and snow colours.
     glm::vec3 high(200.0f, 0.0f, -300.0f);
-    high.y = Landscape::terrainHeight(high.x, high.z) + 60.0f;
+    high.y = Landscape::groundHeight(high.x, high.z) + 60.0f;
     TRY(setCameraPosition(high));
     TRY(setCameraRotation(0.2f, 0.12f));
     (void)at(35.0f, "mountains");
@@ -1612,13 +1612,14 @@ NRE_SCENARIO(landscape_demo) {
     };
     glm::vec3 noonSky = band(noon, 0.0f, 0.15f), noonGround = band(noon, 0.8f, 1.0f);
     CHECK(noonSky.b > noonSky.r && luminance(noonSky) > 0.2f);
-    CHECK(luminance(noonGround) > 0.05f);
+    CHECK(luminance(noonGround) > 0.05f && noonGround.g > noonGround.b);   // green land, not just the water plane
     glm::vec3 goldenGround = band(golden, 0.8f, 1.0f);
     CHECK(goldenGround.r / std::max(goldenGround.b, 1e-3f) > noonGround.r / std::max(noonGround.b, 1e-3f));
     CHECK(luminance(band(dusk, 0.0f, 1.0f)) < luminance(band(noon, 0.0f, 1.0f)));
     return true;
 }
 
+// Two boxes side by side, 4 m ahead: picking at each one's projected centre finds it, on its front face.
 NRE_SCENARIO(pick_hit) {
     Session session(ApiMode::SceneMode);
     auto model = TRY(createModel(ASSET_DIR "/Box.glb"));
