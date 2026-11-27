@@ -1,0 +1,59 @@
+# Build environment for the portable Linux x86_64 release of NRE (librenderer + libnre_c).
+#
+# Ubuntu 24.04 (glibc 2.39) is the baseline: binaries built here run on any distro with glibc >= 2.39.
+# The renderer needs GCC 15 (#embed in src/renderer/defaultAssets/defaultAssets.h), which Ubuntu 24.04 only has
+# from the ubuntu-toolchain-r/test PPA. Its libstdc++ is newer than the distro's (GLIBCXX_3.4.34 vs 3.4.33), so
+# build-linux.sh links libstdc++ and libgcc statically (hidden by --exclude-libs,ALL): no libstdc++ requirement.
+# Used by build-linux.sh; not meant to be run by hand.
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates gpg-agent software-properties-common \
+    && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        git gcc-15 g++-15 ninja-build pkg-config file curl binutils \
+        libvulkan1 glslc libgl-dev \
+        libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
+        libwayland-dev libxkbcommon-dev wayland-protocols \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CC=gcc-15 CXX=g++-15
+
+# Ubuntu 24.04's CMake 3.28 doesn't know GCC's C++26 flag (CMAKE_CXX_STANDARD 26 fails), so use Kitware's binary.
+ARG CMAKE_VERSION=3.31.8
+ARG CMAKE_SHA256=630615d8e98ac33eba7fbe472626dff5c899c85af3c024585ae109166a6909d0
+RUN curl -fsSL -o /tmp/cmake.tar.gz \
+        https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz \
+    && echo "${CMAKE_SHA256}  /tmp/cmake.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/cmake.tar.gz -C /opt \
+    && ln -s /opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/cmake /usr/local/bin/cmake \
+    && rm /tmp/cmake.tar.gz
+
+# Vulkan 1.4 headers: vk-bootstrap uses 1.4 types (Ubuntu 24.04's libvulkan-dev has 1.3.275), and the renderer uses
+# vk_enum_string_helper.h from Vulkan-Utility-Libraries. Same version as the dev setup. Only headers end up being
+# used: librenderer links Ubuntu's own loader (libvulkan1, libvulkan.so.1), so it can't pick up loader exports that
+# a 1.3 loader doesn't have.
+ARG VULKAN_VERSION=1.4.363
+RUN for repo in Vulkan-Headers Vulkan-Utility-Libraries; do \
+        git clone --depth 1 --branch v${VULKAN_VERSION} https://github.com/KhronosGroup/$repo.git /tmp/$repo \
+        && cmake -S /tmp/$repo -B /tmp/$repo/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/opt/vulkan -DCMAKE_PREFIX_PATH=/opt/vulkan \
+        && cmake --build /tmp/$repo/build && cmake --install /tmp/$repo/build \
+        && rm -rf /tmp/$repo || exit 1; \
+    done
+
+# GLFW 3.4 as a static, position-independent lib with both X11 and Wayland. It dlopens libX11 / libwayland-client /
+# libxkbcommon at runtime, so librenderer doesn't get a NEEDED entry for them.
+ARG GLFW_VERSION=3.4
+RUN git clone --depth 1 --branch ${GLFW_VERSION} https://github.com/glfw/glfw.git /tmp/glfw \
+    && cmake -S /tmp/glfw -B /tmp/glfw/build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/glfw \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DGLFW_BUILD_X11=ON -DGLFW_BUILD_WAYLAND=ON \
+        -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF \
+    && cmake --build /tmp/glfw/build \
+    && cmake --install /tmp/glfw/build \
+    && rm -rf /tmp/glfw
